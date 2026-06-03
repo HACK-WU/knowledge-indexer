@@ -221,3 +221,4 @@ import-kb
 - 外部导入说明：[`import-kb.md`](./import-kb.md)
 - 异常与恢复：[`error-handling.md`](./error-handling.md)
 - 架构与数据文件关系：[`architecture.md`](./architecture.md)
+- 备份与恢复：[`backup-restore.md`](./backup-restore.md)

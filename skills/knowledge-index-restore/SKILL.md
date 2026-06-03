@@ -125,5 +125,6 @@ ki scan-kb import --scope {scope} --results ai-results.json
 
 - 异常处理详细说明：`docs/error-handling.md`
 - 典型工作流：`docs/workflows.md`
+- 备份与恢复：`docs/backup-restore.md`
 - 备份机制实现：`scripts/lib/wal.ts`
 - 数据存储层：`scripts/lib/store.ts`

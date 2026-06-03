@@ -33,6 +33,7 @@
 - **外部导入与 `mapping` 示例**：[`docs/import-kb.md`](./docs/import-kb.md)
 - **异常处理与恢复建议**：[`docs/error-handling.md`](./docs/error-handling.md)
 - **典型工作流**：[`docs/workflows.md`](./docs/workflows.md)
+- **备份与恢复**：[`docs/backup-restore.md`](./docs/backup-restore.md)
 
 如果你现在最关心 `scan-kb import` 的 `ai-results.json` 格式，请直接看：[`docs/scan-kb.md`](./docs/scan-kb.md)
 
@@ -238,7 +239,8 @@ knowledge-indexer/
 │   ├── import-kb.md
 │   ├── scan-kb.md
 │   ├── error-handling.md
-│   └── workflows.md
+│   ├── workflows.md
+│   └── backup-restore.md
 ├── scripts/                       # CLI 脚本
 │   ├── scan-kb.ts                 # 统一入口（import / diff / scan / vectorize）
 │   ├── import-kb.ts               # [旧流程] @deprecated

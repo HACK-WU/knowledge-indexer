@@ -91,3 +91,4 @@ npx jiti scripts/import-kb.ts \
 
 - 新流程详细说明：[`scan-kb.md`](./scan-kb.md)
 - 典型工作流：[`workflows.md`](./workflows.md)
+- 备份与恢复：[`backup-restore.md`](./backup-restore.md)

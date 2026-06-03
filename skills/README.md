@@ -83,3 +83,4 @@ knowledge-indexer/skills/
 - 测试覆盖：`test/`
 - 知识索引总览：`README.md`
 - scan-kb 子命令详解：`docs/scan-kb.md`
+- 备份与恢复：`docs/backup-restore.md`

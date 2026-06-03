@@ -182,3 +182,4 @@ npx jiti scripts/scan-kb.ts vectorize \
 - 外部导入总览：[`import-kb.md`](./import-kb.md)
 - 错误与恢复建议：[`error-handling.md`](./error-handling.md)
 - 完整工作流：[`workflows.md`](./workflows.md)
+- 备份与恢复：[`backup-restore.md`](./backup-restore.md)
