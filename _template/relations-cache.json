@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "scope": "",
+  "partition_config": {
+    "hotPercent": 0.3,
+    "warmPercent": 0.5,
+    "reservedEmerging": 10,
+    "recentHours": 48,
+    "minHotCount": 1,
+    "decayStep": 5,
+    "halfLifeHours": 24,
+    "maxHotCount": 10,
+    "maxWarmCount": 50,
+    "maxColdCount": null,
+    "maxKeywordCount": 50
+  },
+  "groups": {},
+  "updatedAt": null
+}

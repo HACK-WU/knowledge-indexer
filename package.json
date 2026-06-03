@@ -1,0 +1,44 @@
+{
+  "name": "knowledge-indexer",
+  "version": "0.1.0",
+  "description": "AI 知识索引整理工具 - 对外部知识进行结构化索引和导航",
+  "type": "module",
+  "bin": {
+    "knowledge-indexer": "./bin/knowledge-indexer.mjs"
+  },
+  "scripts": {
+    "scan-kb": "npx jiti scripts/scan-kb.ts",
+    "manage-index": "npx jiti scripts/manage-index.ts",
+    "query-group": "npx jiti scripts/query-group.ts",
+    "get-module-info": "npx jiti scripts/get-module-info.ts",
+    "sync-relation": "npx jiti scripts/sync-relation.ts",
+    "test": "npx jiti test/manage-index.test.ts",
+    "test:all": "npx jiti test/*.test.ts",
+    "test:manage-index": "npx jiti test/manage-index.test.ts",
+    "test:query-group": "npx jiti test/query-group.test.ts",
+    "test:get-module-info": "npx jiti test/get-module-info.test.ts",
+    "test:sync-relation": "npx jiti test/sync-relation.test.ts",
+    "test:import-kb": "npx jiti test/import-kb.test.ts",
+    "test:scan-kb": "npx jiti test/scan-kb.test.ts",
+    "test:lib": "npx jiti test/lib.test.ts",
+    "test:integration": "npx jiti test/integration.test.ts",
+    "test:error-handling": "npx jiti test/error-handling.test.ts",
+    "test:scope-isolation": "npx jiti test/scope-isolation.test.ts",
+    "test:migrate-keywords": "npx jiti test/migrate-keywords.test.ts"
+  },
+  "keywords": [
+    "knowledge",
+    "indexer",
+    "ai-agent",
+    "knowledge-management"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.0",
+    "jiti": "^2.6.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
