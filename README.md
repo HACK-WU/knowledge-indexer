@@ -58,7 +58,7 @@
    bash install-latest.sh
    ```
 
-2. **配置嵌入 API**：确保 `~/.config/memory-mcp/config.yaml` 中已配置嵌入 API 密钥。
+2. **配置嵌入 API**：确保 `~/.config/memory-mcp/config.yaml` 中已配置嵌入 API 密钥。配置文档详见：[memory-lancedb-mcp 配置文档](https://github.com/HACK-WU/memory-lancedb-mcp#configuration-reference)
 
 3. **注册 scope**：首次使用某个 scope 前，需在配置文件中注册该 scope（详见下方"外部知识库导入"部分）。
 
