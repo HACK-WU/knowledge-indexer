@@ -2,11 +2,12 @@
  * incremental.ts —— S-06：增量导入
  *
  * 三类操作：
- *   - action='add'    → 新增：batchVectorize → 写 relations-cache + local KB
- *   - action='modify' → 更新：mem delete oldId → batchVectorize → 写新 memoryId
+ *   - action='add'    → 新增：bulkVectorize → 写 relations-cache + local KB
+ *   - action='modify' → 更新：mem delete oldId → bulkVectorize → 写新 memoryId
  *   - action='delete' → 删除：mem delete oldId → 移除 cache + local KB
  *
  * Group 树只增不删；source.commit 全部成功后才更新到 HEAD。
+ * 使用 bulk-store 批量向量化 add + modify，消除逐条 mem store 的进程启动开销。
  */
 
 import fs from 'fs';
@@ -23,7 +24,7 @@ import {
 import { readJson, writeJson, ensureScopeDir } from './store.js';
 import { normalizeAiResults, type ScanResultEntry, type AiResultsFile } from './ai-results.js';
 import {
-  vectorizeOne,
+  bulkVectorize,
   deleteMemory,
   type BatchVectorizeOptions,
 } from './batch-vectorize.js';
@@ -33,6 +34,13 @@ import type {
   ImportResult,
   HandleImportArgs,
 } from './import.js';
+import {
+  logPhaseStart,
+  logPhaseDone,
+  logProgress,
+  logInfo,
+  logSummary,
+} from './progress.js';
 
 // ─── 类型 ───
 
@@ -70,11 +78,6 @@ function stripMarkdownExtension(filename: string): string {
 function deriveRelationText(filePath: string): string {
   const base = stripMarkdownExtension(path.posix.basename(filePath));
   return base.replace(/[*~`]/g, '').trim() || base;
-}
-
-function buildVectorizeContent(entry: ScanResultEntry): string {
-  const kw = (entry.keywords || []).join(', ');
-  return `[摘要] ${entry.summary}\n[关键词] ${kw}\n[路径] ${entry.path}`;
 }
 
 function getGitHead(dir: string): string | null {
@@ -227,9 +230,11 @@ export interface HandleIncrementalArgs extends HandleImportArgs {
 }
 
 export function handleIncremental(args: HandleIncrementalArgs): IncrementalResult {
+  const TOTAL_PHASES = 4;
   ensureScopeDir(args.scope);
 
-  // 1) 校验 source 块（必须先有首次导入）
+  // Phase 1: 校验 source 块 + 解析 ai-results
+  logPhaseStart(1, TOTAL_PHASES, '校验增量导入前置条件 ...');
   const existingSource = getSource(args.scope);
   if (!existingSource) {
     throw new Error(
@@ -237,7 +242,6 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
     );
   }
 
-  // 2) 解析 ai-results
   const results: AiResultsFile = normalizeAiResults(args.resultsFile);
   if (args.sourceDirOverride) results.meta.sourceDir = args.sourceDirOverride;
   if (args.rootNameOverride) results.meta.rootName = args.rootNameOverride;
@@ -245,14 +249,14 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
   if (!fs.existsSync(results.meta.sourceDir) || !fs.statSync(results.meta.sourceDir).isDirectory()) {
     throw new Error(`meta.sourceDir 不存在或不是目录：${results.meta.sourceDir}`);
   }
-  // 增量模式下 rootName 必须与首次一致
   if (results.meta.rootName !== existingSource.rootName) {
     throw new Error(
       `meta.rootName="${results.meta.rootName}" 与首次导入的 rootName="${existingSource.rootName}" 不一致`
     );
   }
+  logPhaseDone(1, TOTAL_PHASES, '校验通过');
 
-  // 3) 读 group-index + relations-cache
+  // 读取 group-index + relations-cache
   const groupIndexPath = getGroupIndexPath(args.scope);
   const relationsCachePath = getRelationsCachePath(args.scope);
   const groupIndex = readJson<GroupIndex>(groupIndexPath);
@@ -261,7 +265,7 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
     throw new Error('scope 缺少 group-index.json 或 relations-cache.json');
   }
 
-  // 4) 分类
+  // 分类
   const cls = classifyEntries(results.entries);
   const errors: { path: string; error: string }[] = [];
   const groupsTouched = new Set<string>();
@@ -271,75 +275,19 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
   let modified = 0;
   let deleted = 0;
 
-  // 5) 处理 add
-  for (const e of cls.add) {
-    const r = vectorizeOne(e, args.scope, memOpts);
-    if (!r.ok) {
-      errors.push({ path: e.path, error: r.error });
-      continue;
-    }
-    ensureGroupPathInTree(groupIndex, e.groupPath);
-    groupsTouched.add(e.groupPath);
-    const relationText = deriveRelationText(e.path);
-    upsertRelation(relationsCache, e.groupPath, relationText, e.keywords || [], r.memoryId, e.path);
-    const absPath = path.resolve(results.meta.sourceDir, e.path);
-    const moduleInfo = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : (e.summary || '');
-    writeLocalKb(args.scope, e.groupPath, relationText, moduleInfo);
-    added++;
-  }
-
-  // 6) 处理 modify：先 mem delete oldId，再 mem store 拿 newId
-  for (const e of cls.modify) {
+  // ── Phase 2: 删除过时条目 ──────────────────────────────
+  const deleteTotal = cls.delete.length;
+  logPhaseStart(2, TOTAL_PHASES, `删除过时条目（${deleteTotal} 条）...`);
+  for (let i = 0; i < cls.delete.length; i++) {
+    const e = cls.delete[i];
+    logProgress(i + 1, deleteTotal, `[delete] ${e.path}`);
     if (!e.memoryId) {
-      // 没有旧 id，降级为 add
-      const r = vectorizeOne(e, args.scope, memOpts);
-      if (!r.ok) {
-        errors.push({ path: e.path, error: `[降级 add] ${r.error}` });
-        continue;
-      }
-      ensureGroupPathInTree(groupIndex, e.groupPath);
-      groupsTouched.add(e.groupPath);
-      const relationText = deriveRelationText(e.path);
-      upsertRelation(relationsCache, e.groupPath, relationText, e.keywords || [], r.memoryId, e.path);
-      const absPath = path.resolve(results.meta.sourceDir, e.path);
-      const moduleInfo = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : (e.summary || '');
-      writeLocalKb(args.scope, e.groupPath, relationText, moduleInfo);
-      added++;
-      continue;
-    }
-
-    // 删除旧（失败不阻塞，仅记录 warning）
-    const del = deleteMemory(e.memoryId, memOpts);
-    if (!del.ok) {
-      errors.push({ path: e.path, error: `[modify warn] mem delete oldId 失败：${del.error}` });
-    }
-    // 写新
-    const r = vectorizeOne(e, args.scope, memOpts);
-    if (!r.ok) {
-      errors.push({ path: e.path, error: r.error });
-      continue;
-    }
-    ensureGroupPathInTree(groupIndex, e.groupPath);
-    groupsTouched.add(e.groupPath);
-    const relationText = deriveRelationText(e.path);
-    upsertRelation(relationsCache, e.groupPath, relationText, e.keywords || [], r.memoryId, e.path);
-    const absPath = path.resolve(results.meta.sourceDir, e.path);
-    const moduleInfo = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : (e.summary || '');
-    writeLocalKb(args.scope, e.groupPath, relationText, moduleInfo);
-    modified++;
-  }
-
-  // 7) 处理 delete
-  for (const e of cls.delete) {
-    if (!e.memoryId) {
-      // S-02 已经校验，不应到这里；防御
       errors.push({ path: e.path, error: 'delete 条目缺少 memoryId' });
       continue;
     }
     const del = deleteMemory(e.memoryId, memOpts);
     if (!del.ok) {
       errors.push({ path: e.path, error: `[delete warn] mem delete 失败：${del.error}` });
-      // 仍尝试清理索引
     }
     const relationText = deriveRelationText(e.path);
     const removedFromCache = removeFromCache(relationsCache, e.path);
@@ -347,20 +295,87 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
       errors.push({ path: e.path, error: `[delete warn] relations-cache 中未找到 sourcePath=${e.path}` });
     }
     removeFromLocalKb(args.scope, e.groupPath, relationText);
-    deleted++;
+    if (del.ok) deleted++;
+  }
+  logPhaseDone(2, TOTAL_PHASES, `删除完成：${deleted} 条`);
+
+  // ── Phase 3: 预处理 modify + bulk-store 批量向量化 ─────
+  const modifyWithId = cls.modify.filter((e) => e.memoryId);
+  const modifyWithoutId = cls.modify.filter((e) => !e.memoryId);
+  const vectorizeTotal = cls.add.length + cls.modify.length;
+
+  logPhaseStart(3, TOTAL_PHASES, `预处理 modify + 批量向量化（add=${cls.add.length}, modify=${cls.modify.length}）...`);
+
+  // 3a) 预删除 modify 旧 memoryId（失败不阻塞）
+  if (modifyWithId.length > 0) {
+    logInfo(`预删除 ${modifyWithId.length} 条旧记忆 ...`);
+    for (const e of modifyWithId) {
+      const del = deleteMemory(e.memoryId!, memOpts);
+      if (!del.ok) {
+        errors.push({ path: e.path, error: `[modify warn] mem delete oldId 失败：${del.error}` });
+      }
+    }
   }
 
-  // 8) 持久化
+  if (vectorizeTotal > 0) {
+    // 3b) 构建批量向量化列表（add + modify）
+    const toVectorize: ScanResultEntry[] = [...cls.add, ...cls.modify];
+    // 基于 entry 本身属性推导 origin，保证与 toVectorize 顺序一致
+    const origins: Array<'add' | 'modify'> = toVectorize.map((e) => {
+      if (e.action !== 'modify') return 'add' as const;
+      // modify 但无 memoryId → 降级为 add
+      return e.memoryId ? 'modify' as const : 'add' as const;
+    });
+
+    // 3c) 批量向量化
+    const vec = bulkVectorize(toVectorize, args.scope, {
+      timeoutMs: 60_000 + vectorizeTotal * 10_000,
+    });
+
+    // 3d) 写 relations-cache + local KB
+    for (let i = 0; i < toVectorize.length; i++) {
+      const e = toVectorize[i];
+      const origin = origins[i];
+      const memoryId = vec.ok.get(e.path);
+
+      if (!memoryId) {
+        const err = vec.errors.find((err) => err.path === e.path);
+        const prefix = origin === 'modify' ? '[modify] ' : '[add] ';
+        errors.push({ path: e.path, error: `${prefix}${err?.error || '向量化失败'}` });
+        continue;
+      }
+
+      ensureGroupPathInTree(groupIndex, e.groupPath);
+      groupsTouched.add(e.groupPath);
+      const relationText = deriveRelationText(e.path);
+      upsertRelation(relationsCache, e.groupPath, relationText, e.keywords || [], memoryId, e.path);
+      const absPath = path.resolve(results.meta.sourceDir, e.path);
+      const moduleInfo = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : (e.summary || '');
+      writeLocalKb(args.scope, e.groupPath, relationText, moduleInfo);
+
+      if (origin === 'modify') modified++;
+      else added++;
+    }
+
+    logPhaseDone(3, TOTAL_PHASES, `向量化完成：add=${added}, modify=${modified}, errors=${vec.errors.length}`);
+  } else {
+    logPhaseDone(3, TOTAL_PHASES, '无需向量化');
+  }
+
+  // ── Phase 4: 持久化 + 更新 source.commit ──────────────
+  logPhaseStart(4, TOTAL_PHASES, '持久化 + 更新 source ...');
   writeJson(groupIndexPath, groupIndex as unknown as Record<string, unknown>);
   writeJson(relationsCachePath, relationsCache as unknown as Record<string, unknown>);
 
-  // 9) 更新 source.commit
   const newCommit = getGitHead(results.meta.sourceDir);
   if (!newCommit) {
     throw new Error(`无法获取 sourceDir 的 git HEAD：${results.meta.sourceDir}`);
   }
   const newSource = { ...existingSource, commit: newCommit };
   setSource(args.scope, newSource);
+  logPhaseDone(4, TOTAL_PHASES, `source 已更新，commit=${newCommit.slice(0, 8)}`);
+
+  logSummary(`增量导入完成：total=${results.entries.length}  added=${added}  modified=${modified}  deleted=${deleted}  errors=${errors.length}`);
 
   return {
     ok: true,

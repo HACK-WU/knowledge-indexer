@@ -3,7 +3,7 @@
  *
  * 5 个 Phase：
  *   Phase 1: validateAndNormalize  → 读 ai-results.json，校验 + 补全
- *   Phase 2: batchVectorize         → 调 mem store 批量向量化
+ *   Phase 2: bulkVectorize          → 调 mem bulk-store 批量向量化（支持断点续跑）
  *   Phase 3: ensureGroups           → 按 groupPath 建 Group 树
  *   Phase 4: writeRelations         → 写 relations-cache + local KB（含 memoryId/sourcePath）
  *   Phase 5: recordSource           → 写 group-index.source 块（含 git HEAD commit）
@@ -28,7 +28,18 @@ import { DEFAULT_PARTITION_CONFIG, type PartitionConfig } from './constants.js';
 import type { Relation } from './scoring.js';
 
 import { normalizeAiResults, type AiResultsFile, type ScanResultEntry } from './ai-results.js';
-import { batchVectorize, type BatchVectorizeResult } from './batch-vectorize.js';
+import { bulkVectorize, type BatchVectorizeResult } from './batch-vectorize.js';
+import {
+  readProgressFile,
+  writeProgressFile,
+  cleanProgressFile,
+  validateProgressFile,
+  type ProgressEntry,
+  logPhaseStart,
+  logPhaseDone,
+  logInfo,
+  logSummary,
+} from './progress.js';
 
 // ─── 类型 ───────────────────────────────────────────────
 
@@ -333,14 +344,84 @@ function phase1Validate(args: HandleImportArgs): {
   return { results, mapping };
 }
 
-/** Phase 2: 批量向量化（已封装 S-03）*/
+/** Phase 2: 批量向量化（使用 bulk-store + 断点续跑）*/
 function phase2Vectorize(
   entries: ScanResultEntry[],
-  scope: string
-): BatchVectorizeResult {
-  // full 模式下应当全部 action='add'，但允许 modify/delete 也通过（filter delete）
-  const toVectorize = entries.filter((e) => e.action !== 'delete');
-  return batchVectorize(toVectorize, scope, { timeoutMs: 60_000 });
+  scope: string,
+  rootName: string,
+  totalPhases: number
+): {
+  vec: BatchVectorizeResult;
+  skippedFromProgress: Map<string, string>; // path → memoryId（从进度文件恢复的）
+  newProgressEntries: ProgressEntry[];
+} {
+  const skippedFromProgress = new Map<string, string>();
+  const newProgressEntries: ProgressEntry[] = [];
+
+  // 检查进度文件（断点续跑）
+  const existingProgress = validateProgressFile(
+    readProgressFile(scope),
+    scope,
+    'full',
+    rootName
+  );
+
+  let skipCount = 0;
+  if (existingProgress && existingProgress.completed.length > 0) {
+    for (const entry of existingProgress.completed) {
+      skippedFromProgress.set(entry.path, entry.memoryId);
+    }
+    skipCount = skippedFromProgress.size;
+    logInfo(`发现进度文件，跳过已完成: ${skipCount} 条`);
+  }
+
+  // 过滤掉 action=delete 的条目
+  const allToVectorize = entries.filter((e) => e.action !== 'delete');
+  // 过滤掉进度文件中已完成的条目
+  const needVectorize = allToVectorize.filter((e) => !skippedFromProgress.has(e.path));
+
+  logPhaseStart(2, totalPhases, `批量向量化（${allToVectorize.length} 条${skipCount > 0 ? `，${skipCount} 已跳过` : ''}）...`);
+
+  let vec: BatchVectorizeResult;
+
+  if (needVectorize.length === 0) {
+    // 所有条目已向量量化
+    vec = { ok: new Map(), errors: [] };
+    logPhaseDone(2, totalPhases, `全部已跳过，无需向量化`);
+  } else {
+    vec = bulkVectorize(needVectorize, scope, { timeoutMs: 60_000 + needVectorize.length * 10_000 });
+
+    // 构建新完成的进度条目
+    for (const [p, mid] of vec.ok) {
+      const entry = needVectorize.find((e) => e.path === p);
+      if (entry) {
+        newProgressEntries.push({
+          path: entry.path,
+          groupPath: entry.groupPath,
+          relation: deriveRelationText(entry.path),
+          memoryId: mid,
+        });
+      }
+    }
+
+    logPhaseDone(2, totalPhases, `向量化完成：新增 ${vec.ok.size}，失败 ${vec.errors.length}${skipCount > 0 ? `，跳过 ${skipCount}` : ''}`);
+  }
+
+  // 合并 memoryMap 并写入进度文件
+  const mergedCompleted: ProgressEntry[] = [
+    ...(existingProgress?.completed || []),
+    ...newProgressEntries,
+  ];
+  writeProgressFile(scope, {
+    scope,
+    mode: 'full',
+    rootName,
+    startedAt: existingProgress?.startedAt || new Date().toISOString(),
+    total: allToVectorize.length,
+    completed: mergedCompleted,
+  });
+
+  return { vec, skippedFromProgress, newProgressEntries };
 }
 
 /** Phase 3: ensure groups */
@@ -410,23 +491,36 @@ function phase5RecordSource(scope: string, sourceDir: string, rootName: string):
 
 // ─── 主入口 ─────────────────────────────────────────────
 
+const TOTAL_PHASES = 5;
+
 export function handleImport(args: HandleImportArgs): ImportResult {
   // 0) 准备 scope 目录
   ensureScopeDir(args.scope);
 
-  // Phase 1
+  // Phase 1: 校验 + 归一化
+  logPhaseStart(1, TOTAL_PHASES, '校验 ai-results.json ...');
   const { results, mapping } = phase1Validate(args);
   const total = results.entries.length;
+  logPhaseDone(1, TOTAL_PHASES, `校验通过，共 ${total} 条条目，rootName="${results.meta.rootName}"`);
 
-  // Phase 2
-  const vec = phase2Vectorize(results.entries, args.scope);
+  // Phase 2: 批量向量化（含断点续跑）
+  const { vec, skippedFromProgress } = phase2Vectorize(
+    results.entries,
+    args.scope,
+    results.meta.rootName,
+    TOTAL_PHASES
+  );
+
+  // 合并 memoryMap：进度文件恢复的 + 本次新向量化的
+  const mergedMap = new Map([...skippedFromProgress, ...vec.ok]);
+  const skipCount = skippedFromProgress.size;
 
   const ctx: ImportContext = {
     scope: args.scope,
     sourceDir: results.meta.sourceDir,
     rootName: results.meta.rootName,
     entries: results.entries,
-    memoryMap: vec.ok,
+    memoryMap: mergedMap,
     groups: new Set<string>(),
     mapping,
   };
@@ -440,8 +534,10 @@ export function handleImport(args: HandleImportArgs): ImportResult {
     throw new Error('scope 初始化失败：缺少 group-index.json 或 relations-cache.json');
   }
 
-  // Phase 3
+  // Phase 3: 构建 Group 树
+  logPhaseStart(3, TOTAL_PHASES, '构建 Group 树 ...');
   phase3EnsureGroups(ctx, groupIndex);
+  logPhaseDone(3, TOTAL_PHASES, `Group 树构建完成，涉及 ${ctx.groups.size} 个 Group`);
 
   // Phase 4 — 只处理向量化成功（或本身不需向量化）的条目
   const successfulEntries = ctx.entries.filter((e) => {
@@ -449,14 +545,23 @@ export function handleImport(args: HandleImportArgs): ImportResult {
     return ctx.memoryMap.has(e.path);
   });
   ctx.entries = successfulEntries;
+  logPhaseStart(4, TOTAL_PHASES, `写入元数据（${ctx.entries.length} 条 relations + local KB）...`);
   phase4WriteRelations(ctx, relationsCache);
 
   // 持久化
   writeJson(groupIndexPath, groupIndex as unknown as Record<string, unknown>);
   writeJson(relationsCachePath, relationsCache as unknown as Record<string, unknown>);
+  logPhaseDone(4, TOTAL_PHASES, '元数据写入完成');
 
-  // Phase 5
+  // Phase 5: 记录 source
+  logPhaseStart(5, TOTAL_PHASES, '记录 source commit ...');
   const source = phase5RecordSource(args.scope, results.meta.sourceDir, results.meta.rootName);
+  logPhaseDone(5, TOTAL_PHASES, `source 已记录，commit=${source.commit.slice(0, 8)}`);
+
+  // 成功完成，清理进度文件（REQ-04）
+  cleanProgressFile(args.scope);
+
+  logSummary(`导入完成：total=${total}  vectorized=${mergedMap.size}  skipped=${skipCount}  errors=${vec.errors.length}`);
 
   return {
     ok: true,
@@ -465,7 +570,7 @@ export function handleImport(args: HandleImportArgs): ImportResult {
     scope: args.scope,
     stats: {
       total,
-      vectorized: vec.ok.size,
+      vectorized: mergedMap.size,
       errors: vec.errors.length,
     },
     errors: vec.errors,

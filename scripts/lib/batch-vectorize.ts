@@ -1,8 +1,10 @@
 /**
- * batch-vectorize.ts —— S-03：批量调用 `mem store` 完成 entries 向量化
+ * batch-vectorize.ts —— S-03：批量调用 `mem store` / `mem bulk-store` 完成 entries 向量化
  *
  * 设计要点：
- *   - 串行执行（避免 LanceDB write lock）
+ *   - bulkVectorize（推荐）：一次 `mem bulk-store` 进程写入全部条目，消除 N 次进程启动 + N 次锁获取
+ *   - batchVectorize（兼容）：串行逐条 `mem store`，用于增量等小批量场景
+ *   - vectorizeOne：单条向量化，增量 modify 使用
  *   - 通过 stdout `Memory ID: <id>` 行（由 src/cli.ts 输出）解析 memoryId
  *   - 失败条目记入 errors，不中断整体
  *   - 默认 category=kb-import，便于后续清理/统计
@@ -10,6 +12,9 @@
  */
 
 import { execFileSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import type { ScanResultEntry } from './ai-results.js';
 
@@ -28,6 +33,20 @@ export interface BatchVectorizeOptions {
   timeoutMs?: number;
   /** memory category，默认 kb-import */
   category?: string;
+}
+
+/** bulk-store --json 输出结构 */
+interface BulkStoreJsonResult {
+  total: number;
+  ok: number;
+  errors: number;
+  skipped: number;
+  elapsedSeconds: number;
+  details: {
+    ok: { index: number; text: string; id: string }[];
+    errors: { index: number; text: string; error: string }[];
+    skipped: { index: number; text: string; reason: string }[];
+  };
 }
 
 /**
@@ -143,4 +162,118 @@ export function deleteMemory(
     const statusInfo = typeof e.status === 'number' ? ` exitCode=${e.status}` : '';
     return { ok: false, error: `mem delete ${memoryId} 失败${statusInfo}: ${e.message}${stderr ? `\nstderr=${stderr.trim()}` : ''}`.trim() };
   }
+}
+
+/**
+ * 批量向量化（使用 mem bulk-store）
+ *
+ * 一次进程写入全部条目，消除 N 次进程启动 + N 次文件锁获取的开销。
+ * 100 条从 ~300s（串行 mem store）降至 ~30-50s（单进程 bulk-store）。
+ *
+ * @param entries  需要向量化的条目（调用方应预先过滤掉 action=delete）
+ * @param scope    目标 scope
+ * @param options  选项
+ * @returns        ok Map（成功）+ errors（失败明细）
+ */
+export function bulkVectorize(
+  entries: ScanResultEntry[],
+  scope: string,
+  options: BatchVectorizeOptions = {}
+): BatchVectorizeResult {
+  const ok = new Map<string, string>();
+  const errors: { path: string; error: string }[] = [];
+
+  if (entries.length === 0) return { ok, errors };
+
+  const category = options.category || DEFAULT_CATEGORY;
+  // bulk-store 耗时 = 条目数 × 1~3s，超时需要更宽裕
+  const timeout = options.timeoutMs
+    || parseInt(process.env.MEM_BULK_TIMEOUT_MS || '', 10)
+    || (60_000 + entries.length * 10_000);
+
+  // 1) 构建批量存储的 JSON 数组
+  const bulkEntries = entries.map((entry) => ({
+    text: buildVectorizeContent(entry),
+    category,
+    scope,
+  }));
+
+  // 2) 写入临时文件
+  const tmpFile = path.join(os.tmpdir(), `mem-bulk-${scope}-${Date.now()}.json`);
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(bulkEntries), 'utf-8');
+
+    // 3) 调用 mem bulk-store
+    //    stdio: ['ignore', 'pipe', 'inherit']
+    //    - stdout piped → 捕获 JSON 结果
+    //    - stderr inherited → 用户可看到 bulk-store 的原生进度输出
+    const stdout = execFileSync(
+      'mem',
+      ['bulk-store', '-f', tmpFile, '--json', '--scope', scope],
+      {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'inherit'],
+        timeout,
+        maxBuffer: 10 * 1024 * 1024, // 10MB，足够容纳大量条目的 JSON 结果
+      }
+    );
+
+    // 4) 解析 JSON 结果
+    //    bulk-store --json 可能先输出人类可读进度到 stderr，stdout 只输出 JSON
+    //    但防御性地处理 stdout 中可能混入的非 JSON 行
+    const jsonStr = extractJsonObject(stdout);
+    const result = JSON.parse(jsonStr) as BulkStoreJsonResult;
+
+    // 5) 映射 index → entry path
+    for (const item of result.details.ok) {
+      const entry = entries[item.index];
+      if (entry) {
+        ok.set(entry.path, item.id);
+      }
+    }
+
+    for (const item of result.details.errors) {
+      const entry = entries[item.index];
+      if (entry) {
+        errors.push({ path: entry.path, error: item.error });
+      }
+    }
+
+    // skipped 条目（text 为空等）也视为错误
+    for (const item of result.details.skipped || []) {
+      const entry = entries[item.index];
+      if (entry) {
+        errors.push({ path: entry.path, error: item.reason || 'skipped by bulk-store' });
+      }
+    }
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stdout?: Buffer | string; stderr?: Buffer | string; status?: number };
+    const stderr = e.stderr ? e.stderr.toString() : '';
+    const statusInfo = typeof e.status === 'number' ? ` exitCode=${e.status}` : '';
+    const errMsg = `mem bulk-store 失败${statusInfo}: ${e.message || ''}${stderr ? `\nstderr=${stderr.trim().slice(0, 500)}` : ''}`.trim();
+    // 整体失败，所有条目标记为错误
+    for (const entry of entries) {
+      errors.push({ path: entry.path, error: errMsg });
+    }
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+  }
+
+  return { ok, errors };
+}
+
+/** 从可能混入非 JSON 行的 stdout 中提取最后一个完整 JSON 对象 */
+function extractJsonObject(stdout: string): string {
+  const trimmed = stdout.trim();
+  // 快速路径：整个输出就是一个 JSON 对象
+  if (trimmed.startsWith('{')) {
+    return trimmed;
+  }
+  // 慢速路径：从末尾找最后一个 JSON 对象
+  const lastBrace = trimmed.lastIndexOf('\n{');
+  if (lastBrace >= 0) {
+    return trimmed.slice(lastBrace + 1);
+  }
+  // 兜底：直接尝试解析
+  return trimmed;
 }
