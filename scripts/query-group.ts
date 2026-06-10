@@ -291,7 +291,14 @@ function formatHotRelations(
   allRelations: { text: string; score: number; groupPath: string; isImported: boolean; isEmerging: boolean }[],
   hotCount: number
 ): string {
-  const sorted = [...allRelations].sort((a, b) => b.score - a.score);
+  const bestByGroup = new Map<string, typeof allRelations[number]>();
+  for (const item of allRelations) {
+    const existing = bestByGroup.get(item.groupPath);
+    if (!existing || item.score > existing.score) {
+      bestByGroup.set(item.groupPath, item);
+    }
+  }
+  const sorted = [...bestByGroup.values()].sort((a, b) => b.score - a.score);
   const top = sorted.slice(0, hotCount);
   if (top.length === 0) return '(暂无热门索引)';
 
@@ -719,13 +726,6 @@ program
           // 完整索引树
           console.log('📁 完整索引树:');
           console.log(renderTree(groupIndex.roots, groupScores, partition, depth, partitionFilter));
-          console.log('');
-
-          // 帮助信息
-          console.log('💡 帮助信息:');
-          console.log('- 查询具体 Group: "查询 <路径>" (如 "查询 监控/告警中心")');
-          console.log('- 查看热门索引: "热门索引"');
-          console.log('- 查看特定层级: "索引层级 <N>"');
           console.log('');
 
           // 统计信息
