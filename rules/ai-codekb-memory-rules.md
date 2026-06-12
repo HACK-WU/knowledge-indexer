@@ -12,11 +12,16 @@
   ├─ 否 → 本规则不介入
   └─ 是 → scope 已指定?
       ├─ 否 → 问用户
-      └─ 是 → ki query-group --mode full 拉全景 → 缓存
+      └─ 是 → 查询类型?
+          ├─ 定位级（找文件/函数/类/报错行）
+          │   → 直接用 SearchSymbol / grep / Read，不走 KB
+          └─ 理解级（架构/流程/设计意图/排查思路/模块关系）
+              → ki query-group --mode full 拉全景 → 缓存
 
-查询项目知识（四步走）:
+查询项目知识（四步走，理解级专用）:
   ① 定位 Group  → 从缓存全景中锁定目标 Group
   ② 查热区      → ki query-group --groups <G> --mode hot,emerging
+                  （若①已明确 Relation → 可跳过，直接③）
   ③ 取原文      → 命中 → ki get-module-info → 提炼回答
   ④ 语义兜底    → ②/③ 未命中 → memory_recall → 仍无 → 问用户
 
@@ -67,11 +72,24 @@
 
 > 这个问题可能涉及项目代码，我需要先加载知识库索引吗？
 
+### 查询类型判定（定位级 vs 理解级）
+
+通过 §2 判定“涉及代码”后，进一步区分查询类型，选择最高效的路径：
+
+| 类型 | 特征 | 推荐路径 | 示例 |
+|------|------|----------|------|
+| **定位级** | 目标明确，只需找到位置 | SearchSymbol / grep / Read，**不走 KB** | “`AlertViewSet` 在哪”“这个接口的 URL 是什么”“这个报错在第几行” |
+| **理解级** | 需要架构/流程/设计意图等上下文 | **走 KB 四步走流程** | “告警收敛是怎么实现的”“这个模块的架构是什么”“A 和 B 的依赖关系” |
+
+**判断口诀**：能用一个 `grep` 回答的 → 定位级；需要读完一个文件才能回答的 → 理解级。
+
+> 混合型问题（如“告警引擎核心在哪 + 它怎么工作的”）：定位部分用 SearchSymbol，理解部分走 KB。两者可并行。
+
 ---
 
 ## 3. 对话开始：拉取全景
 
-**触发条件**：对话涉及代码（见 §2 判定标准）。
+**触发条件**：对话涉及代码且为“理解级”查询（见 §2 查询类型判定）。定位级查询不走 KB，无需拉取全景。
 
 **缓存策略**：首次查询后，索引信息在当前会话中有效，后续对话无需重复拉取。仅在执行写入操作（sync-relation / scan-kb import）后需要刷新。
 
@@ -111,14 +129,19 @@ my-project/ (score: 25.2) [热]
 
 ```mermaid
 flowchart TD
-    A([用户提问]) --> B{能否从已缓存的<br/>全景索引定位Group?}
+    A([用户提问]) --> Z{查询类型?}
+    Z -- 定位级 --> Z1[SearchSymbol / grep<br/>直接定位]
+    Z1 --> H([结束])
+    Z -- 理解级 --> B{能否从已缓存的<br/>全景索引定位Group?}
     B -- 否 --> C[重新确认/扩大范围<br/>ki query-group --mode full]
     C --> B
-    B -- 是 --> D[查该Group热区<br/>ki query-group --groups G<br/>--mode hot,emerging]
+    B -- 是 --> P{全景中已明确<br/>Relation名称?}
+    P -- 是 --> F[取原文<br/>ki get-module-info]
+    P -- 否 --> D[查该Group热区<br/>ki query-group --groups G<br/>--mode hot,emerging]
     D --> E{命中relation?}
-    E -- 是 --> F[取原文<br/>ki get-module-info]
+    E -- 是 --> F
     F --> G[提炼回答]
-    G --> H([结束])
+    G --> H
     E -- 否 --> I[语义兜底<br/>mcp memory_recall]
     I --> J{命中记忆?}
     J -- 是 --> K[提取摘要去掉路径段<br/>→ sync-relation 回写本地]
@@ -133,6 +156,8 @@ flowchart TD
 
 - **若缓存中无明确匹配**，可重新执行 `ki query-group --scope ${scope} --mode full` 确认或扩大范围，并更新缓存。
 - **若定位到多个候选 Group**，优先选择得分最高的；不确定时可依次排查。
+
+**快捷路径（跳过第②步）**：如果全景索引中已经能看到与用户问题直接匹配的 Relation 名称（如用户问“告警收敛”，全景中有“告警收敛机制”），可跳过第②步，直接进入第③步 `get-module-info`。判断标准：Relation 名称与用户问题关键词高度吻合，无需通过热区排序来筛选。
 
 ### 第②步：查热门 + 新兴热区
 
