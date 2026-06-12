@@ -34,8 +34,12 @@
 **加载前必须确认文件存在**。若目标 SKILL 文件不存在：
 
 1. **立即停止加载流程**
-2. **提示用户**：
-   > 未找到 `{文件名}`，请确认 knowledge-indexer/skills/ 目录下是否已创建该文件。
+2. **提示用户**（二选一）：
+   - 手动创建：请确认 `knowledge-indexer/skills/` 目录下是否已创建该文件
+   - 一键安装：
+     ```bash
+     curl -fsSL https://raw.githubusercontent.com/HACK-WU/knowledge-indexer/master/scripts/install.sh | bash -s -- "$(pwd)" --skills --rules
+     ```
 3. **不执行任何 ki 命令**（无行为规则指导时禁止操作）
 
 > `ki-foundation.md` 是所有 skill 的前置依赖。若此文件缺失，整个知识索引功能不可用。
