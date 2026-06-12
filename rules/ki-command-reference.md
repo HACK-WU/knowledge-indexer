@@ -53,6 +53,13 @@ ki query-group --scope <scope> --groups "目标Group路径" --mode hot,emerging
 
 **用途**：查看指定 Group 下的热门知识和新兴热区（近 48 小时内频繁使用的知识）。
 
+**可选参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--hot-count <count>` | 5 | 热门展示个数 |
+| `--depth <depth>` | 4 | 索引层级深度（`--mode full` 时生效） |
+
 **输出示例**：
 
 ```
@@ -108,12 +115,34 @@ ki sync-relation \
 
 **`sync-relation` 同名覆盖**：Relation 名称相同时，自动覆盖原有内容。
 
+**批量模式**：当需一次性写入多条 Relation 时，使用 `--input` 指定 JSON 文件：
+
+```bash
+ki sync-relation --scope <scope> --input /path/to/batch.json
+```
+
+`batch.json` 格式：
+
+```json
+[
+  {
+    "group": "目标Group路径",
+    "relation": "Relation名称",
+    "module-info": "Markdown内容",
+    "keywords": "关键词1,关键词2"
+  }
+]
+```
+
 ---
 
 ### 5. 管理 Group
 
 ```bash
-# 创建 Group
+# 创建根节点（新 scope 首次使用时必须先创建根节点）
+ki manage-index --scope <scope> --action create-root --root-name "根节点名称"
+
+# 创建子 Group
 ki manage-index --scope <scope> --action create --parent "父Group路径" --name "新Group名"
 
 # 删除 Group（含子数据）
@@ -127,6 +156,10 @@ ki manage-index --scope <scope> --action delete --parent "父Group路径" --name
 ```
 
 **`--force` 会删除 Group 以及所有子 Relation。**
+
+**`create-root` vs `create`**：
+- `create-root`：新 scope 首次初始化时使用，创建根节点（需 `--root-name`）
+- `create`：在已有 Group 下创建子节点（需 `--parent` + `--name`）
 
 ---
 
@@ -144,8 +177,8 @@ ki manage-index --scope <scope> --action delete --parent "父Group路径" --name
 
 | 错误 | 原因 | 修复 |
 |------|------|------|
-| `scope not found` | scope 尚未创建 | 先执行 `ki sync-relation` 写入任意一条数据自动创建 scope |
-| Group 不存在 | 尚未创建该 Group | 执行 `ki manage-index --action create` 创建 |
+| `scope not found` | scope 尚未创建 | 先执行 `ki manage-index --action create-root --root-name "名称"` 创建根节点，或执行 `ki sync-relation` 写入任意一条数据自动创建 |
+| Group 不存在 | 尚未创建该 Group | 执行 `ki manage-index --action create` 创建（若 scope 也无根节点，先 `create-root`） |
 | `keywords` 被拒绝 | 包含代码符号或未出现在原文中 | 改用自然语言词，确认词在 module-info 中真实存在 |
 | `${scope}` 仍是字面量 | 用户未指定 scope | 暂停，先问用户确认 scope |
 | Relation 名称与预期不符 | 使用了错误的名称 | 用 `ki query-group --mode full` 确认实际名称 |
