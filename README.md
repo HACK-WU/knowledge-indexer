@@ -27,15 +27,55 @@
 
 ## 文档导航
 
+### AI Agent Skills
+
+> **`skills/`** — Agent 行为规则，按需加载。加载顺序见 [`rules/skill-load-guide.md`](./rules/skill-load-guide.md)。
+
+| Skill | 场景 | 核心能力 |
+|-------|------|---------|
+| [**ki-foundation**](./skills/ki-foundation/SKILL.md) | 前置知识（必读） | ki 架构心智模型 + 命令参考 |
+| [**codekb-skill**](./skills/codekb-skill/SKILL.md) | 代码知识库检索/写入 | 四步走查询 + 白名单/黑名单 |
+| [**memory-skill**](./skills/memory-skill/SKILL.md) | 项目记忆/用户画像读写 | 归档机制 + 自动沉淀 + Group 结构 |
+
+```
+涉及项目知识？
+  ├─ 否 → 不加载
+  └─ 是 → 已加载过 ki-foundation？→ 否 → 按顺序加载：
+      ① ki-foundation  （必读前置）
+      ② codekb-skill  （代码知识场景）
+         memory-skill  （项目记忆/用户偏好场景）
+```
+
+### 操作指南
+
+| 文档 | 场景 |
+|------|------|
+| `docs/build-kb.md` | 首次构建知识索引 |
+| `docs/update-kb.md` | 增量更新知识索引 |
+| `docs/query-kb.md` | 知识库查询 |
+| `docs/manage-index.md` | 索引结构管理 |
+| `docs/verify-index.md` | 验证操作结果 |
+| `docs/restore-data.md` | 数据恢复 / 重新初始化 |
+
+### Agent 行为规则（完整版）
+
+| 文档 | 覆盖范围 |
+|------|----------|
+| `docs/codekb-agent-guide.md` | 代码知识库：四步走、白名单/黑名单、memory_recall 兜底、写入 KB 规则 |
+| `docs/memory-agent-guide.md` | 记忆系统：归档机制、自动沉淀、Group 结构、用户画像 |
+| `docs/ki-command-guide.md` | 公共命令参考：query-group / get-module-info / sync-relation / manage-index |
+
+### 设计文档与架构
+
 - **架构与协作关系**：[`docs/architecture.md`](./docs/architecture.md)
 - **CLI 参考**：[`docs/cli.md`](./docs/cli.md)
-- **scan-kb 子命令详解**（含 `import`、`diff`）：[`docs/scan-kb.md`](./docs/scan-kb.md)
-- **外部导入与 `mapping` 示例**：[`docs/import-kb.md`](./docs/import-kb.md)
+- **scan-kb 子命令详解**：[`docs/scan-kb.md`](./docs/scan-kb.md)
+- **外部导入规范**：[`docs/import-kb.md`](./docs/import-kb.md)
 - **异常处理与恢复建议**：[`docs/error-handling.md`](./docs/error-handling.md)
 - **典型工作流**：[`docs/workflows.md`](./docs/workflows.md)
 - **备份与恢复**：[`docs/backup-restore.md`](./docs/backup-restore.md)
-
-如果你现在最关心 `scan-kb import` 的 `ai-results.json` 格式，请直接看：[`docs/scan-kb.md`](./docs/scan-kb.md)
+- **记忆系统需求**：[`docs/memory-system-requirements.md`](./docs/memory-system-requirements.md)
+- **数据流图**：[`docs/memory-system-dataflow.md`](./docs/memory-system-dataflow.md)
 
 ## 核心概念
 

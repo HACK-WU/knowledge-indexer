@@ -1,3 +1,8 @@
+---
+name: codekb-skill
+description: 代码知识库检索与写入行为规则。当用户问题涉及代码知识、模块架构、API 接口、bug 排查、代码审查等场景时使用。覆盖四步走查询流程、定位级/理解级判定、memory_recall 语义兜底、写入 KB 白名单黑名单、批量导入规范。
+---
+
 # codekb-skill 代码知识库检索行为规则
 
 > **前置条件**：AI 已阅读 `ki-foundation.md`，了解 ki 命令语法和架构心智模型。

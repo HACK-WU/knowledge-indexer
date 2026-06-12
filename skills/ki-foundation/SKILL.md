@@ -1,3 +1,8 @@
+---
+name: ki-foundation
+description: ki 命令架构心智模型与命令参考。codekb-skill 和 memory-skill 的前置依赖。当 AI 需要使用 knowledge-indexer 时必须先加载本 skill。覆盖 ki 三层架构、内部数据结构、运行时链路、query-group/get-module-info/sync-relation/manage-index 命令语法、keywords 规则、常见错误与修复。
+---
+
 # ki 基础知识与命令参考
 
 > 本文件是 `codekb-skill` 和 `memory-skill` 的**前置知识**。

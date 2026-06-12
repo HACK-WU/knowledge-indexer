@@ -1,3 +1,8 @@
+---
+name: memory-skill
+description: 项目记忆与用户画像读写行为规则。当涉及项目背景、技术栈选型、进度跟踪、用户偏好、沟通风格等非代码类上下文时使用。覆盖归档机制（archive.md）、自动沉淀触发条件、Group 结构定义、记忆更新流程、scope 边界划分。
+---
+
 # memory-skill 记忆系统行为规则
 
 > **前置条件**：AI 已阅读 `ki-foundation.md`，了解 ki 命令语法和架构心智模型。
