@@ -1,4 +1,4 @@
-# 代码知识库检索行为规则
+# ai-codekb-memory-rules 代码知识库检索行为规则
 
 > **面向 BK-Monitor 项目**。本规则直接告诉你每个阶段该敲什么命令、拿到什么输出、做什么判断。
 > 不再需要去翻其他文档。
@@ -121,7 +121,7 @@ flowchart TD
     G --> H([结束])
     E -- 否 --> I[语义兜底<br/>mcp memory_recall]
     I --> J{命中记忆?}
-    J -- 是 --> K[解析text中的路径<br/>→ 取原文 → 回写本地]
+    J -- 是 --> K[提取摘要去掉路径段<br/>→ sync-relation 回写本地]
     K --> G
     J -- 否 --> L[回问用户<br/>补充线索]
     L --> H
@@ -182,7 +182,7 @@ ki get-module-info --scope ${scope} --group "目标Group路径" --relation "Rela
 |------|-----|------|
 | query | `"<用户问题核心词> <关键词词云摘取>"` | **必须用 `query` 参数，禁止用 `text`** |
 | limit | `3` | |
-| tags | `"knowledge-index,${scope}"` | 逗号分隔，"knowledge-index" 前缀固定 |
+| scope | `"${scope}"` | 直接指定 scope 过滤，**禁止用 `tags`**（实测不生效） |
 
 **返回结构**：
 ```json
@@ -213,24 +213,27 @@ ki get-module-info --scope ${scope} --group "目标Group路径" --relation "Rela
 |------|------|------|
 | `Cannot read properties of undefined (reading 'match')` | 用了 `text` 参数 | 改为 `query` 参数 |
 
-#### 4.1.1 命中后：取原文并回写本地
+#### 4.1.1 命中后：回写本地索引
 
-`memory_recall` 命中后，`details.memories[].text` 中包含**本地 KB 原文的路径**（三段式的第三段）。Agent 必须：
+`memory_recall` 命中后，`details.memories[].text` 是三段式文本：`[摘要]\n[关键词]\n[路径]`。Agent 必须：
 
-1. **解析路径**：从 `text` 中提取 `[路径]` 部分（如 `my-project/API/用户登录接口`）。若路径为空或无法解析，跳过回写，直接基于摘要回答。
-2. **取原文**：`ki get-module-info --scope ${scope} --group "提取的Group路径" --relation "提取的Relation名称"`
-3. **回写本地**：执行 `ki sync-relation` 将该知识沉淀到本地索引，提升后续查询效率
-4. **提炼回答**：基于原文回答用户问题
+1. **提取摘要**：取 `[摘要]` 部分内容作为 `--module-info`（**去掉 `[路径]` 段**，路径是 KB 内部索引信息，不应写入本地 KB 原文）。
+2. **提取关键词**：取 `[关键词]` 部分内容作为 `--keywords`。
+3. **解析路径用于定位**：从 `[路径]` 段提取 Group 路径和 Relation 名称（如 `BK-Monitor-Wiki/告警系统设计/告警引擎核心` → group=`BK-Monitor-Wiki/告警系统设计`，relation=`告警引擎核心`）。若路径为空或无法解析，跳过回写，直接基于摘要回答。
+4. **回写本地**：执行 `ki sync-relation` 将摘要沉淀到本地索引，提升后续查询效率。
+5. **提炼回答**：基于摘要内容回答用户问题。
 
 ```bash
 ki sync-relation \
   --scope ${scope} \
-  --group "提取的Group路径" \
-  --relation "提取的Relation名称" \
-  --module-info "原文内容" \
-  --keywords "关键词1,关键词2"
+  --group "从路径提取的Group" \
+  --relation "从路径提取的Relation" \
+  --module-info "memory_recall 返回的摘要内容（不含路径段）" \
+  --keywords "从摘要/关键词段提取的关键词"
 ```
 
+> **内容来源说明**：`--module-info` 使用 `memory_recall` 返回的**摘要文本**（三段式的第一段），不额外调用 `get-module-info` 取原文。摘要已经包含核心知识要点，足以作为本地 KB 条目。
+>
 > 这样做的目的是：热门知识从记忆系统逐步沉淀到本地索引，后续同类查询可直接命中本地热区，无需再走语义搜索。
 
 #### 4.2 回问用户
@@ -448,18 +451,26 @@ ki manage-index --scope ${scope} --action delete --parent "父" --name "子" --f
 |------|-----|----------|
 | query | 用户问题 + 关键词词云提取 | **必须用 `query`，禁止 `text`** |
 | limit | 3 | |
-| tags | `knowledge-index,${scope}` | 前缀 `knowledge-index` 固定 |
+| scope | `${scope}` | 直接指定 scope 过滤，**禁止用 `tags`**（实测不生效） |
 
 ---
 
 ## 10. 数据存储位置
 
+ki 工具的数据存储在 npm 全局安装目录内（非项目仓库目录）：
+
 ```
-knowledge-indexer/kb/${scope}/
+<ki安装路径>/kb/${scope}/
 ├── group-index.json       # Group 树索引
 ├── relations-cache.json   # Relations 缓存（含 memoryId）
-└── {Group}/index.json     # 本地 KB 原文
+├── backup/                # 自动备份
+└── {Group}/               # 本地 KB 原文（按 Group 分目录）
+    └── index.json
 ```
+
+当前环境实际路径：`/root/.npm/node_modules/lib/node_modules/knowledge-indexer/kb/monitor/`
+
+> 项目仓库 `bk-monitor-wiki/knowledge-indexer/` 下仅有 `backup/` 目录（历史备份），不包含运行时数据。
 
 `memory_recall` 查询的向量数据存储在 `~/.local/share/memory-mcp/lancedb/`。
 
