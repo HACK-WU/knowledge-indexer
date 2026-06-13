@@ -28,13 +28,12 @@ ki query-group --scope <scope> --mode full
 **示例输出**：
 ```
 📁 完整索引树:
-  项目根/
-    设计文档/
-      API/
-      knowledge-index/
-    用户模块/
-      登录/
-      注册/
+  设计文档/
+    API/
+    knowledge-index/
+  用户模块/
+    登录/
+    注册/
 ```
 
 ### 2. Relations 验证

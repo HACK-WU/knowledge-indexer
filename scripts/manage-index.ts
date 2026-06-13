@@ -3,55 +3,41 @@
  * manage-index.ts - Group 树索引管理 CLI
  * 
  * 用法:
- *   npx jiti scripts/manage-index.ts --scope <scope> --action create-root --root-name <name>
- *   npx jiti scripts/manage-index.ts --scope <scope> --action create --parent <path> --name <name>
- *   npx jiti scripts/manage-index.ts --scope <scope> --action delete --parent <path> --name <name> [--force]
+ *   npx jiti scripts/manage-index.ts --scope <scope> --action create --name <name> [--parent <path>]
+ *   npx jiti scripts/manage-index.ts --scope <scope> --action delete --name <name> [--parent <path>] [--force]
  *   npx jiti scripts/manage-index.ts --action list-scopes
  */
 
 import { Command } from 'commander';
-import { readJson, writeJson, ensureScopeDir } from './lib/store.js';
-import { getGroupIndexPath, validateScope, listAllScopes } from './lib/scope.js';
-import { DEFAULT_ROOT_NAME } from './lib/constants.js';
-
-// ─── 类型定义 ───
-
-interface GroupIndex {
-  version: number;
-  scope: string;
-  roots: Record<string, Record<string, unknown>>;
-  updatedAt: string | null;
-}
+import { writeJson, readJson, readGroupIndex } from './lib/store.js';
+import { getGroupIndexPath, getRelationsCachePath, validateScope, listAllScopes } from './lib/scope.js';
+import type { GroupIndex } from './lib/scope.js';
+import { resolveGroupPath, getDirectChildren } from './lib/group-resolve.js';
 
 // ─── 辅助函数 ───
 
 /**
- * 在树中按路径查找"容器"节点：
- * - parentPath 为空字符串时，返回 roots（根容器），用于操作根节点本身
- * - parentPath 为 "a/b" 时，返回 a 节点下的 b 节点对象（即 b 的子节点容器）
- *
- * 注意：在树结构中，每个节点本身就是其子节点的容器（Record<string, unknown>）。
- * 删除/创建子节点等价于在父容器上 delete/赋值 对应 key。
+ * 在树中按路径查找容器节点：
+ * - parentPath 为空字符串时，返回 groups（顶层容器）
+ * - parentPath 为 "a/b" 时，返回 b 节点对象
  *
  * @returns [父容器对象, 路径段数组] 或 null（路径不存在）
  */
 function findContainer(
-  roots: Record<string, Record<string, unknown>>,
+  groups: Record<string, Record<string, unknown>>,
   parentPath: string
 ): [Record<string, unknown>, string[]] | null {
   const segments = parentPath.split('/').filter(Boolean);
 
-  // 空路径：返回 roots 作为容器（用于操作根节点）
+  // 空路径：返回 groups 作为容器（用于操作顶层节点）
   if (segments.length === 0) {
-    return [roots as Record<string, unknown>, []];
+    return [groups as Record<string, unknown>, []];
   }
 
-  // 第一段是根节点名
-  const rootName = segments[0];
-  let current: Record<string, unknown> | undefined = roots[rootName];
+  // 逐级遍历
+  let current: Record<string, unknown> | undefined = groups[segments[0]];
   if (current === undefined) return null;
 
-  // 遍历后续段
   for (let i = 1; i < segments.length; i++) {
     const seg = segments[i];
     if (typeof current[seg] !== 'object' || current[seg] === null) {
@@ -85,31 +71,28 @@ program
   .name('manage-index')
   .description('Group 树索引管理（支持 scope 列表查询）')
   .option('--scope <scope>', '项目隔离标识（list-scopes 时可省略）')
-  .option('--action <action>', '操作：create | delete | create-root | list-scopes', 'create')
-  .option('--parent <parent>', '父节点路径（create/delete 时使用）')
-  .option('--name <name>', '节点名称（create 时使用）')
-  .option('--root-name <rootName>', '根节点名称（create-root 时使用）')
+  .option('--action <action>', '操作：create | delete | list-scopes', 'create')
+  .option('--parent <parent>', '父节点路径（为空时在顶层操作）')
+  .option('--name <name>', '节点名称')
   .option('--force', '强制删除非空节点', false)
   .action(async (opts) => {
     try {
-      const { scope, action, parent, name, rootName, force } = opts;
+      const { scope, action, parent, name, force } = opts;
 
       // ─── list-scopes：不需要 scope ───
       if (action === 'list-scopes') {
         const scopes = listAllScopes();
-        // 为每个 scope 补充根节点信息
         const scopeDetails = scopes.map((s) => {
-          const indexPath = getGroupIndexPath(s);
-          let rootNames: string[] = [];
+          let topGroups: string[] = [];
           try {
-            const data = readJson<GroupIndex>(indexPath);
-            if (data?.roots) {
-              rootNames = Object.keys(data.roots);
+            const data = readGroupIndex(s);
+            if (data?.groups) {
+              topGroups = Object.keys(data.groups);
             }
           } catch (err) {
             console.warn(`警告：scope "${s}" 的 group-index.json 读取失败: ${(err as Error).message}`);
           }
-          return { scope: s, rootNames };
+          return { scope: s, topGroups };
         });
         output({ ok: true, scopes: scopeDetails, total: scopes.length });
         return;
@@ -124,40 +107,22 @@ program
       // 校验 scope
       validateScope(scope);
 
-      // 确保 scope 目录存在
-      ensureScopeDir(scope);
-
-      const indexPath = getGroupIndexPath(scope);
-      const data = readJson<GroupIndex>(indexPath);
+      const data = readGroupIndex(scope);
 
       if (!data) {
-        output({ ok: false, error: `group-index.json 不存在：${indexPath}` });
+        output({ ok: false, error: `group-index.json 不存在` });
         process.exit(1);
       }
 
-      switch (action) {
-        // ─── 创建根节点 ───
-        case 'create-root': {
-          if (!rootName) {
-            output({ ok: false, error: 'create-root 需要 --root-name 参数' });
-            process.exit(1);
-          }
-          if (data.roots[rootName]) {
-            output({ ok: false, error: `根节点 "${rootName}" 已存在` });
-            process.exit(1);
-          }
-          data.roots[rootName] = {};
-          writeJson(indexPath, data);
-          output({ ok: true, path: rootName });
-          break;
-        }
+      const indexPath = getGroupIndexPath(scope);
 
-        // ─── 创建子节点 ───
+      // 读取 relations-cache 用于 resolveGroupPath
+      const cachePath = getRelationsCachePath(scope);
+      const groupsData = readJson<Record<string, unknown>>(cachePath)?.groups as Record<string, unknown> || {};
+
+      switch (action) {
+        // ─── 创建节点 ───
         case 'create': {
-          if (parent === undefined || parent === null) {
-            output({ ok: false, error: 'create 需要 --parent 参数（顶层节点请使用 create-root）' });
-            process.exit(1);
-          }
           if (!name) {
             output({ ok: false, error: 'create 需要 --name 参数' });
             process.exit(1);
@@ -166,56 +131,112 @@ program
             output({ ok: false, error: `节点名 "${name}" 不能包含 "/"` });
             process.exit(1);
           }
-          if (!parent) {
-            output({ ok: false, error: 'create 的父节点路径不能为空，顶层节点请使用 create-root' });
-            process.exit(1);
-          }
 
-          const result = findContainer(data.roots, parent);
+          // parent 为空或未传 → 在顶层创建
+          const parentPath = (parent || '').replace(/^\/+|\/+$/g, '');
+          const result = findContainer(data.groups, parentPath);
           if (!result) {
-            output({ ok: false, error: `父节点路径不存在：${parent}` });
+            // 尝试 Group 路径自动补全
+            const resolved = resolveGroupPath(parentPath, data, groupsData);
+            if (resolved.matched) {
+              const resolvedParent = resolved.resolvedPath;
+              const resolvedResult = findContainer(data.groups, resolvedParent);
+              if (resolvedResult) {
+                if (resolved.hint) console.error(resolved.hint);
+                const [parentNode] = resolvedResult;
+                if (parentNode[name] !== undefined) {
+                  output({ ok: false, error: `节点 "${name}" 已存在于 "${resolvedParent}" 下` });
+                  process.exit(1);
+                }
+                parentNode[name] = {};
+                writeJson(indexPath, data as unknown as Record<string, unknown>);
+                output({ ok: true, path: `${resolvedParent}/${name}`, hint: resolved.hint || undefined });
+                break;
+              }
+            }
+            // 补全也失败 → 给出可用子节点提示
+            const hintParts: string[] = [`父节点路径不存在：${parentPath || '(顶层)'}`];
+            if (resolved.hint) hintParts.push(resolved.hint);
+            const topChildren = Object.keys(data.groups);
+            if (topChildren.length > 0 && !parentPath) {
+              hintParts.push(`可用的顶层节点：${topChildren.join(', ')}`);
+            }
+            output({ ok: false, error: hintParts.join('\n') });
             process.exit(1);
           }
 
           const [parentNode] = result;
           if (parentNode[name] !== undefined) {
-            output({ ok: false, error: `节点 "${name}" 已存在于 "${parent}" 下` });
+            output({ ok: false, error: `节点 "${name}" 已存在于 "${parentPath || '(顶层)'}" 下` });
             process.exit(1);
           }
 
           parentNode[name] = {};
-          writeJson(indexPath, data);
-          output({ ok: true, path: `${parent}/${name}` });
+          writeJson(indexPath, data as unknown as Record<string, unknown>);
+          output({ ok: true, path: parentPath ? `${parentPath}/${name}` : name });
           break;
         }
 
         // ─── 删除节点 ───
         case 'delete': {
-          // 允许 --parent="" 删除根节点本身
-          if (parent === undefined || parent === null) {
-            output({ ok: false, error: 'delete 需要 --parent 参数（删除根节点请传 --parent ""）' });
-            process.exit(1);
-          }
           if (!name) {
             output({ ok: false, error: 'delete 需要 --name 参数' });
             process.exit(1);
           }
 
-          // 默认根节点不可删除：仅当 parent 为空（即操作的是根节点）且 name === DEFAULT_ROOT_NAME 时拦截
-          if (parent === '' && name === DEFAULT_ROOT_NAME) {
-            output({ ok: false, error: `默认根节点 "${DEFAULT_ROOT_NAME}" 不可删除` });
-            process.exit(1);
-          }
-
-          const result = findContainer(data.roots, parent);
+          // parent 为空或未传 → 从顶层删除
+          const parentPath = (parent || '').replace(/^\/+|\/+$/g, '');
+          const result = findContainer(data.groups, parentPath);
           if (!result) {
-            output({ ok: false, error: `父节点路径不存在：${parent}` });
+            // 尝试 Group 路径自动补全
+            const resolved = resolveGroupPath(parentPath, data, groupsData);
+            if (resolved.matched) {
+              const resolvedParent = resolved.resolvedPath;
+              const resolvedResult = findContainer(data.groups, resolvedParent);
+              if (resolvedResult) {
+                if (resolved.hint) console.error(resolved.hint);
+                const [parentNode] = resolvedResult;
+                if (parentNode[name] === undefined) {
+                  const siblings = Object.keys(parentNode);
+                  const siblingHint = siblings.length > 0
+                    ? `"${resolvedParent}" 下的子节点：${siblings.join(', ')}`
+                    : `"${resolvedParent}" 下无子节点`;
+                  output({ ok: false, error: `节点 "${name}" 不存在于 "${resolvedParent}" 下`, hint: siblingHint });
+                  process.exit(1);
+                }
+                const targetNode = parentNode[name] as Record<string, unknown>;
+                if (!isEmptyNode(targetNode) && !force) {
+                  output({
+                    ok: false,
+                    error: `节点 "${name}" 非空，包含子节点。使用 --force 强制删除`,
+                    children: Object.keys(targetNode),
+                  });
+                  process.exit(1);
+                }
+                delete parentNode[name];
+                writeJson(indexPath, data as unknown as Record<string, unknown>);
+                output({ ok: true, path: `${resolvedParent}/${name}`, hint: resolved.hint || undefined });
+                break;
+              }
+            }
+            // 补全也失败 → 给出可用子节点提示
+            const hintParts: string[] = [`父节点路径不存在：${parentPath || '(顶层)'}`];
+            if (resolved.hint) hintParts.push(resolved.hint);
+            const topChildren = Object.keys(data.groups);
+            if (topChildren.length > 0 && !parentPath) {
+              hintParts.push(`可用的顶层节点：${topChildren.join(', ')}`);
+            }
+            output({ ok: false, error: hintParts.join('\n') });
             process.exit(1);
           }
 
           const [parentNode] = result;
           if (parentNode[name] === undefined) {
-            output({ ok: false, error: `节点 "${name}" 不存在于 "${parent || '(根)'}" 下` });
+            const siblings = Object.keys(parentNode);
+            const siblingHint = siblings.length > 0
+              ? `"${parentPath || '(顶层)'}" 下的子节点：${siblings.join(', ')}`
+              : `"${parentPath || '(顶层)'}" 下无子节点`;
+            output({ ok: false, error: `节点 "${name}" 不存在于 "${parentPath || '(顶层)'}" 下`, hint: siblingHint });
             process.exit(1);
           }
 
@@ -232,14 +253,20 @@ program
           }
 
           delete parentNode[name];
-          writeJson(indexPath, data);
-          output({ ok: true, path: parent ? `${parent}/${name}` : name });
+          writeJson(indexPath, data as unknown as Record<string, unknown>);
+          output({ ok: true, path: parentPath ? `${parentPath}/${name}` : name });
           break;
         }
 
-        default:
-          output({ ok: false, error: `未知操作：${action}` });
+        default: {
+          const validActions = ['create', 'delete', 'list-scopes'];
+          output({
+            ok: false,
+            error: `未知操作：${action}`,
+            hint: `可用操作：${validActions.join(' | ')}`,
+          });
           process.exit(1);
+        }
       }
     } catch (err) {
       output({ ok: false, error: (err as Error).message });

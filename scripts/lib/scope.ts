@@ -70,7 +70,7 @@ export function getLocalKbDir(scope: string, groupPath: string): string {
 /**
  * source 块：记录知识库的外部来源信息
  * - dir: 外部知识库根目录绝对路径
- * - rootName: Group 根节点名称
+ * - rootName: 顶层 Group 名称
  * - commit: 导入时源仓库的 git HEAD commit hash（增量 diff 的起点）
  */
 export interface GroupIndexSource {
@@ -97,6 +97,96 @@ export function getSource(scope: string): GroupIndexSource | null {
   return { dir: source.dir, rootName: source.rootName, commit: source.commit };
 }
 
+// ─── GroupIndex 类型与迁移 ───
+
+/**
+ * GroupIndex 数据结构（v2：去掉 roots 包裹层）
+ *
+ * 旧格式（v1）: { roots: { "项目根": { "API": {} } } }
+ * 新格式（v2）: { groups: { "API": {} } }
+ *
+ * 外部导入的 rootName 直接作为顶层 Group 名（如 "BK-Monitor-Wiki"）
+ */
+export interface GroupIndex {
+  version: number;
+  scope: string;
+  groups: Record<string, Record<string, unknown>>;
+  updatedAt: string | null;
+  source?: GroupIndexSource | null;
+}
+
+/**
+ * 自动迁移旧格式 group-index.json（roots → groups）
+ *
+ * 迁移规则：
+ * - "项目根"（默认根节点）的子节点提升到顶层
+ * - 其他根节点（如 "BK-Monitor-Wiki"）作为顶层 Group 保留
+ * - 迁移后删除 roots 字段
+ *
+ * @returns 迁移后的 GroupIndex；如果无需迁移返回 null
+ */
+export function migrateGroupIndex(data: Record<string, unknown>): GroupIndex | null {
+  // 已经是新格式
+  if (data.groups !== undefined && data.roots === undefined) return null;
+
+  // 没有旧格式字段
+  if (!data.roots || typeof data.roots !== 'object') return null;
+
+  const roots = data.roots as Record<string, Record<string, unknown>>;
+  // 保留已有 groups 数据（防止 roots + groups 同时存在时覆盖）
+  const groups: Record<string, Record<string, unknown>> =
+    (data.groups && typeof data.groups === 'object')
+      ? { ...data.groups as Record<string, Record<string, unknown>> }
+      : {};
+
+  for (const [rootName, children] of Object.entries(roots)) {
+    if (rootName === '项目根') {
+      // 默认根节点的子节点提升到顶层
+      if (children && typeof children === 'object') {
+        Object.assign(groups, children);
+      }
+    } else {
+      // 外部导入的 rootName 作为顶层 Group 保留
+      groups[rootName] = children || {};
+    }
+  }
+
+  const migrated: GroupIndex = {
+    version: (data.version as number) || 1,
+    scope: (data.scope as string) || '',
+    groups,
+    updatedAt: (data.updatedAt as string | null) || null,
+    source: (data.source as GroupIndexSource | null) || null,
+  };
+
+  return migrated;
+}
+
+/**
+ * 确保 Group 路径在 GroupIndex.groups 树中完整存在
+ * 路径中缺失的节点自动补建，Group 树只增不删。
+ *
+ * @example ensureGroupPathInTree(index, "配置/API/鉴权")
+ *           → 依次确保 "配置"、"API"、"鉴权" 节点存在
+ */
+export function ensureGroupPathInTree(index: GroupIndex, groupPath: string): void {
+  const segments = groupPath.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  if (segments.length === 0) return;
+
+  if (!index.groups[segments[0]]) {
+    index.groups[segments[0]] = {};
+  }
+  let current: Record<string, unknown> = index.groups[segments[0]];
+
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i];
+    if (typeof current[seg] !== 'object' || current[seg] === null) {
+      current[seg] = {};
+    }
+    current = current[seg] as Record<string, unknown>;
+  }
+}
+
 // ─── Scope 枚举 ───
 
 /**
@@ -118,7 +208,7 @@ export function listAllScopes(): string[] {
 
 /**
  * 写入 / 更新 source 块到 group-index.json
- * - 不修改 roots / version / scope 字段
+ * - 不修改 groups / version / scope 字段
  * - 自动刷新 updatedAt
  * @throws Error 如果 group-index.json 不存在（调用方应先确保 ensureScopeDir）
  */
@@ -131,12 +221,16 @@ export function setSource(scope: string, source: GroupIndexSource): void {
     throw new Error('setSource 要求 source.{dir,rootName,commit} 均非空');
   }
 
+  // 读取原始数据，先尝试迁移确保数据是新格式
   const raw = fs.readFileSync(filePath, 'utf-8');
-  const data = JSON.parse(raw) as Record<string, unknown>;
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const migrated = migrateGroupIndex(parsed);
+  const data: Record<string, unknown> = migrated
+    ? (migrated as unknown as Record<string, unknown>)
+    : parsed;
+
   data.source = { dir: source.dir, rootName: source.rootName, commit: source.commit };
   data.updatedAt = new Date().toISOString();
 
-  // 同步写盘（与 store.ts 的 writeJson 一致：直接覆盖，不走 WAL；
-  // 此处仅更新 source 子字段，体量小，原子性由调用方串行执行保证）
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
 }

@@ -20,8 +20,10 @@ import {
   getLocalKbDir,
   getSource,
   setSource,
+  ensureGroupPathInTree,
+  type GroupIndex,
 } from './scope.js';
-import { readJson, writeJson, ensureScopeDir } from './store.js';
+import { readJson, writeJson, ensureScopeDir, readGroupIndex } from './store.js';
 import { normalizeAiResults, type ScanResultEntry, type AiResultsFile } from './ai-results.js';
 import {
   bulkVectorize,
@@ -29,7 +31,6 @@ import {
   type BatchVectorizeOptions,
 } from './batch-vectorize.js';
 import type {
-  GroupIndex,
   RelationsCache,
   ImportResult,
   HandleImportArgs,
@@ -67,10 +68,6 @@ interface ClassifiedEntries {
 
 // ─── 工具 ───
 
-function trimSlashes(s: string): string {
-  return s.replace(/^\/+|\/+$/g, '');
-}
-
 function stripMarkdownExtension(filename: string): string {
   return filename.replace(/\.md$/i, '');
 }
@@ -105,19 +102,7 @@ export function classifyEntries(entries: ScanResultEntry[]): ClassifiedEntries {
 
 // ─── Group 树 ───
 
-function ensureGroupPathInTree(index: GroupIndex, groupPath: string): void {
-  const segments = trimSlashes(groupPath).split('/').filter(Boolean);
-  if (segments.length === 0) return;
-  if (!index.roots[segments[0]]) index.roots[segments[0]] = {};
-  let cur: Record<string, unknown> = index.roots[segments[0]];
-  for (let i = 1; i < segments.length; i++) {
-    const seg = segments[i];
-    if (typeof cur[seg] !== 'object' || cur[seg] === null) {
-      cur[seg] = {};
-    }
-    cur = cur[seg] as Record<string, unknown>;
-  }
-}
+// ensureGroupPathInTree 已提取到 scope.ts 作为公共函数
 
 // ─── relations-cache 写/删 ───
 
@@ -259,7 +244,7 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
   // 读取 group-index + relations-cache
   const groupIndexPath = getGroupIndexPath(args.scope);
   const relationsCachePath = getRelationsCachePath(args.scope);
-  const groupIndex = readJson<GroupIndex>(groupIndexPath);
+  const groupIndex = readGroupIndex(args.scope);
   const relationsCache = readJson<RelationsCache>(relationsCachePath);
   if (!groupIndex || !relationsCache) {
     throw new Error('scope 缺少 group-index.json 或 relations-cache.json');

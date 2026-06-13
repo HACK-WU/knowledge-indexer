@@ -135,7 +135,12 @@ program
         output({
           ok: false,
           error: `本地 KB 文件不存在：${localKbPath}`,
-          hint: '请从记忆系统同步或检查数据完整性',
+          hint: [
+            '本地 KB 缺失的可能原因与修复方式：',
+            `1. 使用 sync-relation 重新写入：ki sync-relation --scope ${scope} --group "${resolvedGroup}" --relation "${rel.text}" --module-info <内容> --keywords <词1,词2>`,
+            '2. 如果是从外部 Wiki 导入的数据，检查 scan-kb import 是否完整执行',
+            '3. 检查数据文件是否被误删除或备份恢复不完整',
+          ].join('\n'),
         });
         process.exit(1);
       }
@@ -146,7 +151,7 @@ program
         output({
           ok: false,
           error: `本地 KB 中未找到 "${rel.text}" 的内容`,
-          hint: '请使用 sync-relation.ts 重新写入模块信息',
+          hint: `请使用 sync-relation 重新写入：ki sync-relation --scope ${scope} --group "${resolvedGroup}" --relation "${rel.text}" --module-info <内容> --keywords <词1,词2>`,
         });
         process.exit(1);
       }

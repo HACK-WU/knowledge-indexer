@@ -141,8 +141,8 @@ ki manage-index --action list-scopes
 {
   "ok": true,
   "scopes": [
-    { "scope": "my-project", "rootNames": ["我的项目"] },
-    { "scope": "qoder-wiki", "rootNames": ["QoderWiki"] }
+    { "scope": "my-project", "topGroups": ["API", "设计文档"] },
+    { "scope": "qoder-wiki", "topGroups": ["QoderWiki"] }
   ],
   "total": 2
 }
@@ -150,17 +150,19 @@ ki manage-index --action list-scopes
 
 > `list-scopes` 不需要 `--scope` 参数。
 
-### 创建根节点
+### 创建顶层 Group
 
 ```bash
 ki manage-index \
-  --scope <scope> --action create-root --root-name <name>
+  --scope <scope> --action create --name <name>
 ```
+
+> 不指定 `--parent` 即创建顶层 Group。
 
 **示例：**
 
 ```bash
-ki manage-index --scope my-project --action create-root --root-name "我的项目"
+ki manage-index --scope my-project --action create --name "API"
 ```
 
 输出：

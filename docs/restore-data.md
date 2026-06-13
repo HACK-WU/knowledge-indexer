@@ -11,43 +11,35 @@
 
 ## 备份机制
 
-knowledge-indexer 使用 WAL（Write-Ahead Log）机制，每次写入前自动备份：
+knowledge-indexer 使用原子写入（tmp → rename），保证写入中断不会损坏原文件。不自动生成 backup 目录，由用户自行备份 `kb/` 目录。
 
-```
-kb/{scope}/
-├── group-index.json
-├── relations-cache.json
-├── backup/
-│   ├── group-index.{timestamp}.bak.json
-│   ├── relations-cache.{timestamp}.bak.json
-│   └── ...
-└── {rootName}/
-    └── index.json
-```
+**推荐备份方式**：
 
-**备份格式**：`{filename}.{ISO8601}.bak.json`
+```bash
+# 完整备份
+rsync -av knowledge-indexer/kb/ /path/to/backup/kb/
+
+# 单 scope 备份
+rsync -av knowledge-indexer/kb/{scope}/ /path/to/backup/{scope}/
+```
 
 ## 恢复流程
 
 ### 场景一：从备份恢复（推荐）
 
-当单个文件损坏时，从 `backup/` 目录恢复。
+当数据损坏时，从用户自建的备份恢复。
 
-**Step 1：查看可用备份**
-
-```bash
-ls -la kb/{scope}/backup/
-```
-
-**Step 2：选择备份文件恢复**
+**Step 1：恢复备份文件**
 
 ```bash
-# 复制最新的备份文件
-cp kb/{scope}/backup/group-index.{latest-timestamp}.bak.json kb/{scope}/group-index.json
-cp kb/{scope}/backup/relations-cache.{latest-timestamp}.bak.json kb/{scope}/relations-cache.json
+# 恢复整个 kb 目录
+rsync -av /path/to/backup/kb/ knowledge-indexer/kb/
+
+# 或恢复单个 scope
+rsync -av /path/to/backup/{scope}/ knowledge-indexer/kb/{scope}/
 ```
 
-**Step 3：验证恢复结果**
+**Step 2：验证恢复结果**
 
 ```bash
 # 查询 Group 结构
@@ -79,10 +71,13 @@ rm -rf kb/{scope}
 运行任意会调用 `ensureScopeDir` 的命令，系统会自动从 `_template/` 初始化：
 
 ```bash
-# 方法一：查询 Group 结构（自动初始化）
-ki manage-index --scope {scope} --action create-root --root-name "项目根"
+# 方法一：写入一条数据自动初始化
+ki sync-relation --scope {scope} --group "初始化" --relation "初始条目" --module-info "初始化条目" --keywords "初始化"
 
-# 方法二：列出 scope 确认初始化成功
+# 方法二：创建顶层 Group
+ki manage-index --scope {scope} --action create --name "初始化"
+
+# 方法三：列出 scope 确认初始化成功
 ki manage-index --action list-scopes
 ```
 
@@ -100,7 +95,7 @@ ki scan-kb import --scope {scope} --results ai-results.json
 数据异常
     │
     ├─ JSON 解析失败？
-    │   └─ 是 → 从 backup/ 找最近备份恢复
+    │   └─ 是 → 从用户备份恢复对应文件
     │
     ├─ 文件不存在？
     │   └─ 是 → 从 _template/ 初始化
@@ -111,9 +106,9 @@ ki scan-kb import --scope {scope} --results ai-results.json
 
 ## 常见问题
 
-### Q: 备份文件太多，如何选择？
+### Q: 没有备份怎么办？
 
-选择时间戳最新的备份对（group-index 和 relations-cache 应该时间戳一致或接近）。
+删除损坏的 scope 目录，从模板重新初始化，再用原始 `ai-results.json` 重新导入。
 
 ### Q: 恢复后向量数据丢失怎么办？
 
@@ -121,7 +116,7 @@ ki scan-kb import --scope {scope} --results ai-results.json
 
 ### Q: 如何防止数据丢失？
 
-1. 定期备份 `kb/` 目录
+1. 定期备份 `kb/` 目录（推荐使用 rsync 或 tar）
 2. 使用 git 管理 `ai-results.json` 文件
 3. 重要操作前手动创建快照
 
@@ -130,5 +125,4 @@ ki scan-kb import --scope {scope} --results ai-results.json
 - 异常处理详细说明：`docs/error-handling.md`
 - 典型工作流：`docs/workflows.md`
 - 备份与恢复：`docs/backup-restore.md`
-- 备份机制实现：`scripts/lib/wal.ts`
 - 数据存储层：`scripts/lib/store.ts`

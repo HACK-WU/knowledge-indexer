@@ -66,7 +66,7 @@ S-01 新增字段，记录外部知识库来源信息，用于增量 diff：
 {
   "version": 1,
   "scope": "qoder-wiki",
-  "roots": { "QoderWiki": { ... } },
+  "groups": { "QoderWiki": { ... } },
   "source": {
     "dir": "/abs/path/to/source",
     "rootName": "QoderWiki",
@@ -77,7 +77,7 @@ S-01 新增字段，记录外部知识库来源信息，用于增量 diff：
 ```
 
 - `dir`：外部知识库目录绝对路径
-- `rootName`：导入根节点名称（与 `meta.rootName` 一致）
+- `rootName`：导入时的顶层 Group 名称（与 `meta.rootName` 一致，作为 Group 树的第一层节点）
 - `commit`：导入时的 git HEAD commit，`scan-kb diff` 以此为基准检测变更
 
 ### `relations-cache.json` 的 `memoryId` / `sourcePath`

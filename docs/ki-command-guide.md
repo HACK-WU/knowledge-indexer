@@ -142,8 +142,8 @@ ki sync-relation --scope <scope> --input /path/to/batch.json
 # 列出所有已初始化的 scope（不需要 --scope 参数）
 ki manage-index --action list-scopes
 
-# 创建根节点（新 scope 首次使用时必须先创建根节点）
-ki manage-index --scope <scope> --action create-root --root-name "根节点名称"
+# 创建顶层 Group（不指定 --parent 即创建顶层）
+ki manage-index --scope <scope> --action create --name "Group名称"
 
 # 创建子 Group
 ki manage-index --scope <scope> --action create --parent "父Group路径" --name "新Group名"
@@ -173,11 +173,11 @@ ki manage-index --scope <scope> --action delete --parent "父Group路径" --name
 
 **`--force` 会删除 Group 以及所有子 Relation。**
 
-**`create-root` vs `create`**：
-- `create-root`：新 scope 首次初始化时使用，创建根节点（需 `--root-name`）
-- `create`：在已有 Group 下创建子节点（需 `--parent` + `--name`）
+**`create` 不带 `--parent` vs 带 `--parent`**：
+- 不带 `--parent`：创建顶层 Group
+- 带 `--parent`：在已有 Group 下创建子节点（需 `--parent` + `--name`）
 
-**`list-scopes`**：列出 `kb/` 下所有已初始化的 scope 及其根节点名称，不需要 `--scope` 参数
+**`list-scopes`**：列出 `kb/` 下所有已初始化的 scope 及其顶层 Group 名称，不需要 `--scope` 参数
 
 ---
 
@@ -195,8 +195,8 @@ ki manage-index --scope <scope> --action delete --parent "父Group路径" --name
 
 | 错误 | 原因 | 修复 |
 |------|------|------|
-| `scope not found` | scope 尚未创建 | 先用 `ki manage-index --action list-scopes` 确认已有 scope，再执行 `ki manage-index --action create-root --root-name "名称"` 创建根节点，或执行 `ki sync-relation` 写入任意一条数据自动创建 |
-| Group 不存在 | 尚未创建该 Group | 执行 `ki manage-index --action create` 创建（若 scope 也无根节点，先 `create-root`） |
+| `scope not found` | scope 尚未创建 | 先用 `ki manage-index --action list-scopes` 确认已有 scope，再执行 `ki manage-index --action create --name "名称"` 创建顶层 Group，或执行 `ki sync-relation` 写入任意一条数据自动创建 |
+| Group 不存在 | 尚未创建该 Group | 执行 `ki manage-index --action create --name "名称"` 创建 |
 | `keywords` 被拒绝 | 包含代码符号或未出现在原文中 | 改用自然语言词，确认词在 module-info 中真实存在 |
 | `${scope}` 仍是字面量 | 用户未指定 scope | 暂停，先问用户确认 scope |
 | Relation 名称与预期不符 | 使用了错误的名称 | 用 `ki query-group --mode full` 确认实际名称 |

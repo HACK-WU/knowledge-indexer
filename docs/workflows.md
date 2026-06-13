@@ -19,13 +19,13 @@
 - 希望把它直接写进本地索引
 - 希望以后能被快速命中和读取
 
-### 步骤 1：创建根节点
+### 步骤 1：创建顶层 Group
 
 ```bash
 npx jiti scripts/manage-index.ts \
   --scope my-project \
-  --action create-root \
-  --root-name "我的项目"
+  --action create \
+  --name "API"
 ```
 
 ### 步骤 2：创建 Group

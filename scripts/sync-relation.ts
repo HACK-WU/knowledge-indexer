@@ -14,16 +14,19 @@
 import { Command } from 'commander';
 import fs from 'fs';
 import path from 'path';
-import { readJson, writeJson, ensureScopeDir } from './lib/store.js';
+import { readJson, writeJson, ensureScopeDir, readGroupIndex } from './lib/store.js';
 import {
   getRelationsCachePath,
   getLocalKbDir,
+  getGroupIndexPath,
   validateScope,
 } from './lib/scope.js';
+import type { GroupIndex } from './lib/scope.js';
 import { calculateScore, recordUse } from './lib/scoring.js';
 import type { Relation } from './lib/scoring.js';
 import type { PartitionConfig } from './lib/constants.js';
 import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
+import { resolveGroupPath } from './lib/group-resolve.js';
 
 // ─── 类型定义 ───
 
@@ -77,6 +80,39 @@ function generateNextId(cache: RelationsCache): string {
     }
   }
   return `rel_${String(maxNum + 1).padStart(3, '0')}`;
+}
+
+// ─── Group 树自动补建 ───
+
+/**
+ * 确保 Group 路径在 group-index.json 的 groups 树中完整存在
+ * 如果路径中的某些节点尚未创建，自动补建
+ *
+ * @example "配置/API" → 自动创建 "配置" 和 "API" 节点
+ * @example "BK-Monitor-Wiki/部署运维" → 自动创建 "BK-Monitor-Wiki" 和 "部署运维"
+ */
+function ensureGroupPath(scope: string, groupPath: string): void {
+  const indexPath = getGroupIndexPath(scope);
+  const data = readGroupIndex(scope);
+  if (!data) return;
+
+  const segments = groupPath.split('/').filter(Boolean);
+  if (segments.length === 0) return;
+
+  let modified = false;
+  let parent: Record<string, unknown> = data.groups as Record<string, unknown>;
+
+  for (const seg of segments) {
+    if (!(seg in parent)) {
+      parent[seg] = {};
+      modified = true;
+    }
+    parent = parent[seg] as Record<string, unknown>;
+  }
+
+  if (modified) {
+    writeJson(indexPath, data as unknown as Record<string, unknown>);
+  }
 }
 
 // ─── 关键词校验 ───
@@ -148,7 +184,10 @@ function syncSingleRelation(
     moduleInfo
   );
 
-  // 2. 确保 group 数据存在
+  // 2. 确保 Group 路径在 group-index.json 树中完整存在（自动补建缺失节点）
+  ensureGroupPath(scope, group);
+
+  // 3. 确保 group 数据在 relations-cache 中存在
   if (!cache.groups[group]) {
     cache.groups[group] = {
       hot_relations: [],
@@ -158,7 +197,7 @@ function syncSingleRelation(
   }
   const groupData = cache.groups[group];
 
-  // 3. 查找或创建 Relation
+  // 4. 查找或创建 Relation
   let existingRel = groupData.hot_relations.find((r) => r.text === relationText);
   let evicted: string | null = null;
   const now = Date.now();
@@ -188,7 +227,7 @@ function syncSingleRelation(
       isImported: false,
     };
 
-    // 4. 检查是否需要淘汰
+    // 5. 检查是否需要淘汰
     if (groupData.hot_relations.length >= config.maxHotCount) {
       // 找 score 最低的 Relation
       let minIdx = 0;
@@ -205,14 +244,14 @@ function syncSingleRelation(
       groupData.hot_relations.splice(minIdx, 1);
     }
 
-    // 5. 添加新 Relation
+    // 6. 添加新 Relation
     groupData.hot_relations.push(newRel);
 
     // 按 score 降序排列
     groupData.hot_relations.sort((a, b) => b.score - a.score);
   }
 
-  // 6. 合并 validKeywords 到 Group.keywords（去重 + FIFO 截断）
+  // 7. 合并 validKeywords 到 Group.keywords（去重 + FIFO 截断）
   for (const kw of validKeywords) {
     if (!groupData.keywords.includes(kw)) {
       groupData.keywords.push(kw);
@@ -223,7 +262,7 @@ function syncSingleRelation(
     groupData.keywords.splice(0, overflow);
   }
 
-  // 7. 写入本地 KB
+  // 8. 写入本地 KB
   const localKbPath = getLocalKbDir(scope, group);
   const localKbDir = path.dirname(localKbPath);
   fs.mkdirSync(localKbDir, { recursive: true });
@@ -353,7 +392,9 @@ program
       }
 
       // 单条模式
-      const { group, relation, moduleInfo, keywords } = opts;
+      // 规范化 Group 路径：去除首尾斜杠
+      const group = opts.group ? String(opts.group).replace(/^\/+|\/+$/g, '') : '';
+      const { relation, moduleInfo, keywords } = opts;
 
       if (!group || !relation || !moduleInfo || !keywords) {
         output({
@@ -374,6 +415,18 @@ program
       }
 
       const keywordList = keywords.split(',').map((k: string) => k.trim());
+
+      // Group 路径自动补全提示
+      const groupIndex = readGroupIndex(scope);
+      const cacheForResolve = readJson<RelationsCache>(getRelationsCachePath(scope));
+      if (groupIndex) {
+        const resolved = resolveGroupPath(group, groupIndex, cacheForResolve?.groups || {});
+        if (resolved.matched && resolved.resolvedPath !== group) {
+          console.error(`💡 Group 路径已自动补全："${group}" → "${resolved.resolvedPath}"`);
+        } else if (!resolved.matched && resolved.hint) {
+          console.error(resolved.hint);
+        }
+      }
 
       const cachePath = getRelationsCachePath(scope);
       const cache = readJson<RelationsCache>(cachePath);

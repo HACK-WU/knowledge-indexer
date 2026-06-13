@@ -479,14 +479,11 @@ ki 工具的数据存储在 npm 全局安装目录内（非项目仓库目录）
 <ki安装路径>/kb/${scope}/
 ├── group-index.json       # Group 树索引
 ├── relations-cache.json   # Relations 缓存（含 memoryId）
-├── backup/                # 自动备份
 └── {Group}/               # 本地 KB 原文（按 Group 分目录）
     └── index.json
 ```
 
 当前环境实际路径：`/root/.npm/node_modules/lib/node_modules/knowledge-indexer/kb/monitor/`
-
-> 项目仓库 `bk-monitor-wiki/knowledge-indexer/` 下仅有 `backup/` 目录（历史备份），不包含运行时数据。
 
 `memory_recall` 查询的向量数据存储在 `~/.local/share/memory-mcp/lancedb/`。
 

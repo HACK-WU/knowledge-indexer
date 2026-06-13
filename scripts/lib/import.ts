@@ -21,9 +21,11 @@ import {
   getLocalKbDir,
   getSource,
   setSource,
+  ensureGroupPathInTree,
   type GroupIndexSource,
+  type GroupIndex,
 } from './scope.js';
-import { readJson, writeJson, ensureScopeDir } from './store.js';
+import { readJson, writeJson, ensureScopeDir, readGroupIndex } from './store.js';
 import { DEFAULT_PARTITION_CONFIG, type PartitionConfig } from './constants.js';
 import type { Relation } from './scoring.js';
 
@@ -42,14 +44,6 @@ import {
 } from './progress.js';
 
 // ─── 类型 ───────────────────────────────────────────────
-
-export interface GroupIndex {
-  version: number;
-  scope: string;
-  roots: Record<string, Record<string, unknown>>;
-  updatedAt: string | null;
-  source?: GroupIndexSource | null;
-}
 
 export interface GroupData {
   hot_relations: Relation[];
@@ -161,25 +155,7 @@ function getGitHead(dir: string): string | null {
 
 // ─── Group 树构建 ───────────────────────────────────────
 
-function ensureGroupPathInTree(index: GroupIndex, groupPath: string): boolean {
-  const segments = trimSlashes(groupPath).split('/').filter(Boolean);
-  if (segments.length === 0) return false;
-
-  if (!index.roots[segments[0]]) {
-    index.roots[segments[0]] = {};
-  }
-  let current: Record<string, unknown> = index.roots[segments[0]];
-  let created = false;
-  for (let i = 1; i < segments.length; i++) {
-    const seg = segments[i];
-    if (typeof current[seg] !== 'object' || current[seg] === null) {
-      current[seg] = {};
-      created = true;
-    }
-    current = current[seg] as Record<string, unknown>;
-  }
-  return created;
-}
+// ensureGroupPathInTree 已提取到 scope.ts 作为公共函数
 
 // ─── relations-cache 操作 ───────────────────────────────
 
@@ -429,12 +405,6 @@ function phase3EnsureGroups(
   ctx: ImportContext,
   groupIndex: GroupIndex
 ): void {
-  // root 节点
-  if (!groupIndex.roots[ctx.rootName]) {
-    groupIndex.roots[ctx.rootName] = {};
-  }
-  ctx.groups.add(ctx.rootName);
-
   for (const e of ctx.entries) {
     const target = ctx.mapping?.get(e.path);
     const groupPath = target ? target.groupPath : e.groupPath;
@@ -528,7 +498,7 @@ export function handleImport(args: HandleImportArgs): ImportResult {
   // 读取 group-index + relations-cache
   const groupIndexPath = getGroupIndexPath(args.scope);
   const relationsCachePath = getRelationsCachePath(args.scope);
-  const groupIndex = readJson<GroupIndex>(groupIndexPath);
+  const groupIndex = readGroupIndex(args.scope);
   const relationsCache = readJson<RelationsCache>(relationsCachePath);
   if (!groupIndex || !relationsCache) {
     throw new Error('scope 初始化失败：缺少 group-index.json 或 relations-cache.json');

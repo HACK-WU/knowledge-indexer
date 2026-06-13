@@ -27,8 +27,7 @@
 
 常见错误：
 
-- `create-root` 缺少 `--root-name`
-- `create` 缺少 `--parent` 或 `--name`
+- `create` 缺少 `--name`
 - 非 `list-scopes` 操作缺少 `--scope`
 
 > 忘记 scope 名称？执行 `ki manage-index --action list-scopes` 列出所有已初始化的 scope。
@@ -51,7 +50,7 @@
 
 影响：`query-group.ts`、`manage-index.ts`
 
-恢复：从 `backup/` 或模板恢复。
+恢复：从用户备份恢复，或从模板重新初始化。
 
 ### 本地 KB 文件不存在
 

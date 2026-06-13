@@ -1,8 +1,6 @@
 {
   "version": 1,
   "scope": "",
-  "roots": {
-    "项目根": {}
-  },
+  "groups": {},
   "updatedAt": null
 }

@@ -73,7 +73,7 @@ npx jiti scripts/import-kb.ts \
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `root_name` | string | 可选，覆盖 `--root-name` |
-| `groups[].path` | string | 相对根节点的 Group 路径（不含根名） |
+| `groups[].path` | string | 相对顶层 Group 的路径（不含 rootName） |
 | `groups[].sources[].file` | string | 相对 `--source` 的文件路径 |
 | `groups[].sources[].relation` | string | 导入后的 Relation 名称 |
 | `groups[].sources[].code_refs` | string[] | 可选，追加到 `module-info` 末尾 |

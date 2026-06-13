@@ -16,24 +16,18 @@
 import { Command } from 'commander';
 import fs from 'fs';
 import path from 'path';
-import { ensureScopeDir, readJson, writeJson } from './lib/store.js';
+import { ensureScopeDir, readJson, writeJson, readGroupIndex } from './lib/store.js';
 import {
   getGroupIndexPath,
   getRelationsCachePath,
   getLocalKbDir,
   validateScope,
+  type GroupIndex,
 } from './lib/scope.js';
 import { DEFAULT_PARTITION_CONFIG, type PartitionConfig } from './lib/constants.js';
 import type { Relation } from './lib/scoring.js';
 
 const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024;
-
-interface GroupIndex {
-  version: number;
-  scope: string;
-  roots: Record<string, Record<string, unknown>>;
-  updatedAt: string | null;
-}
 
 interface GroupData {
   hot_relations: Relation[];
@@ -169,25 +163,27 @@ function loadKeywordMap(scanIndexFile?: string): Map<string, string[]> {
   return map;
 }
 
-function ensureRootNode(index: GroupIndex, rootName: string): void {
-  if (!index.roots[rootName]) {
-    index.roots[rootName] = {};
+function ensureTopGroup(index: GroupIndex, rootName: string): void {
+  if (!index.groups[rootName]) {
+    index.groups[rootName] = {};
   }
 }
 
 function checkRootNameConflict(index: GroupIndex, rootName: string): boolean {
-  return !!index.roots[rootName];
+  return !!index.groups[rootName];
 }
 
 function ensureGroupPath(index: GroupIndex, groupPath: string): number {
   const segments = trimSlashes(groupPath).split('/').filter(Boolean);
   if (segments.length === 0) return 0;
 
-  const [rootName, ...rest] = segments;
-  ensureRootNode(index, rootName);
+  const [topName, ...rest] = segments;
+  if (!index.groups[topName]) {
+    index.groups[topName] = {};
+  }
 
   let created = 0;
-  let current = index.roots[rootName];
+  let current = index.groups[topName];
 
   for (const segment of rest) {
     if (typeof current[segment] !== 'object' || current[segment] === null) {
@@ -300,7 +296,7 @@ function importConventionMode(
   summary: ImportSummary
 ): void {
   const files = walkFiles(sourceDir);
-  ensureRootNode(groupIndex, rootName);
+  ensureTopGroup(groupIndex, rootName);
 
   for (const file of files) {
     if (!file.isMarkdown) {
@@ -348,7 +344,7 @@ function importMappingMode(
   keywordMap: Map<string, string[]>,
   summary: ImportSummary
 ): void {
-  ensureRootNode(groupIndex, rootName);
+  ensureTopGroup(groupIndex, rootName);
 
   for (const group of mapping.groups || []) {
     const trimmedGroupPath = trimSlashes(group.path || '');
@@ -422,7 +418,7 @@ program
   .description('外部知识库导入：约定模式 / 配置模式')
   .requiredOption('--scope <scope>', '项目隔离标识')
   .requiredOption('--source <sourceDir>', '外部知识库根目录路径')
-  .requiredOption('--root-name <rootName>', '导入根节点名称')
+  .requiredOption('--root-name <rootName>', '导入顶层 Group 名称')
   .option('--scan-index <scanIndexFile>', '扫描索引文件路径，用于复用关键词')
   .option('--mapping <mappingFile>', '映射配置文件路径')
   .action(async (opts) => {
@@ -460,7 +456,7 @@ program
 
       const groupIndexPath = getGroupIndexPath(scope);
       const relationsCachePath = getRelationsCachePath(scope);
-      const groupIndex = readJson<GroupIndex>(groupIndexPath);
+      const groupIndex = readGroupIndex(scope);
       const relationsCache = readJson<RelationsCache>(relationsCachePath);
 
       if (!groupIndex || !relationsCache) {
@@ -468,9 +464,9 @@ program
         process.exit(1);
       }
 
-      // 根节点已存在时发出警告，允许幂等重新导入
+      // 顶层 Group 已存在时发出警告，允许幂等重新导入
       if (checkRootNameConflict(groupIndex, rootName)) {
-        console.warn(`警告：根节点已存在：${rootName}，将覆盖更新已有内容`);
+        console.warn(`警告：顶层 Group 已存在：${rootName}，将覆盖更新已有内容`);
       }
 
       const keywordMap = loadKeywordMap(scanIndexFile);

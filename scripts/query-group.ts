@@ -223,7 +223,7 @@ function formatHotRelations(
         : item.isEmerging
           ? '[新兴热]'
           : '[热]';
-      return `${prefix} ${item.groupPath} (score: ${fmtScore(item.score)}) ${label}`;
+      return `${prefix} ${item.groupPath} → ${item.text} (score: ${fmtScore(item.score)}) ${label}`;
     })
     .join('\n');
 }
@@ -404,6 +404,9 @@ function formatGroupRelations(
     lines.push(`=== ${groupPath} ===`);
     lines.push('');
     lines.push('(暂无 Relations)');
+    lines.push('');
+    lines.push('💡 可使用 sync-relation 写入知识条目：');
+    lines.push(`   ki sync-relation --scope <scope> --group "${groupPath}" --relation <描述> --module-info <内容> --keywords <词1,词2>`);
     return lines.join('\n');
   }
 
@@ -613,7 +616,7 @@ program
 
           if (!resolved.matched) {
             // 未匹配：显示提示信息
-            results.push(`=== ${gp} ===\n\n(暂无 Relations)\n\n${resolved.hint}`);
+            results.push(`=== ${gp} ===\n\n(暂无 Relations)\n\n💡 可使用 sync-relation 写入知识条目：\n   ki sync-relation --scope ${scope} --group "${gp}" --relation <描述> --module-info <内容> --keywords <词1,词2>\n\n${resolved.hint}`);
             continue;
           }
 

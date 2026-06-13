@@ -16,7 +16,7 @@
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Layer 1: Group 树索引 (group-index.json)          │
-│  - 层级导航：项目根 → 子Group → ...                 │
+│  - 层级导航：顶层Group → 子Group → ...              │
 │  - 物理隔离：每个 scope 独立目录                    │
 └─────────────────────────────────────────────────────┘
           ↓
@@ -48,8 +48,8 @@ ki manage-index --action list-scopes
 {
   "ok": true,
   "scopes": [
-    { "scope": "my-project", "rootNames": ["我的项目"] },
-    { "scope": "qoder-wiki", "rootNames": ["QoderWiki"] }
+    { "scope": "my-project", "topGroups": ["API", "设计文档"] },
+    { "scope": "qoder-wiki", "topGroups": ["QoderWiki"] }
   ],
   "total": 2
 }
@@ -58,43 +58,44 @@ ki manage-index --action list-scopes
 **注意**：
 - `list-scopes` **不需要** `--scope` 参数
 - 仅返回符合 scope 命名规则的已初始化 scope（存在 `relations-cache.json`）
-- 同时返回每个 scope 的根节点名称列表，方便快速了解 scope 内容
+- 同时返回每个 scope 的顶层 Group 名称列表，方便快速了解 scope 内容
 
 ---
 
 ## Group 管理
 
-### 创建根节点
-
-```bash
-ki manage-index \
-  --scope <scope> \
-  --action create-root \
-  --root-name <name>
-```
-
-**输出**：
-```json
-{ "ok": true, "path": "设计文档" }
-```
-
-**注意**：
-- 根节点名称不能重复（重复会输出 warning，幂等覆盖）
-- 默认根节点 "项目根" 不可删除
-
-### 创建子节点
+### 创建顶层 Group
 
 ```bash
 ki manage-index \
   --scope <scope> \
   --action create \
-  --parent <父节点路径> \
-  --name <子节点名称>
+  --name <name>
+```
+
+> 不指定 `--parent` 即创建顶层 Group。
+
+**输出**：
+```json
+{ "ok": true, "path": "API" }
+```
+
+**注意**：
+- Group 名称在同一层级内不能重复
+
+### 创建子 Group
+
+```bash
+ki manage-index \
+  --scope <scope> \
+  --action create \
+  --parent <父Group路径> \
+  --name <子Group名称>
 ```
 
 **示例**：
 ```bash
-# 在 "设计文档" 下创建 "API" 子节点
+# 在 "设计文档" 下创建 "API" 子 Group
 ki manage-index \
   --scope my-project \
   --action create \
@@ -113,8 +114,8 @@ ki manage-index \
 ki manage-index \
   --scope <scope> \
   --action delete \
-  --parent <父节点路径> \
-  --name <子节点名称> \
+  --parent <父Group路径> \
+  --name <Group名称> \
   [--force]
 ```
 
@@ -191,13 +192,12 @@ ki query-group --scope <scope>
 
 **输出**：
 ```
-项目根/
-  设计文档/
-    API/
-      [hot] 用户登录 (score: 8.5) [登录, 认证]
-      [hot] 用户注册 (score: 7.2) [注册, 验证]
-    knowledge-index/
-      [hot] 01-overview (score: 6.0) [概述, 架构]
+设计文档/
+  API/
+    [hot] 用户登录 (score: 8.5) [登录, 认证]
+    [hot] 用户注册 (score: 7.2) [注册, 验证]
+  knowledge-index/
+    [hot] 01-overview (score: 6.0) [概述, 架构]
 ```
 
 ### 完整索引树
@@ -209,12 +209,11 @@ ki query-group --scope <scope> --mode full
 **输出**（含评分和分区标签）：
 ```
 📁 完整索引树:
-  项目根/ (score: 15.3) [热]
-    设计文档/ (score: 13.2) [热]
-      API/ (score: 7.2) [热]
-        [热] 用户登录 (score: 8.5) [登录, 认证]
-      knowledge-index/ (score: 6.0) [常温]
-        [热] 01-overview (score: 6.0) [概述, 架构]
+  设计文档/ (score: 13.2) [热]
+    API/ (score: 7.2) [热]
+      [热] 用户登录 (score: 8.5) [登录, 认证]
+    knowledge-index/ (score: 6.0) [常温]
+      [热] 01-overview (score: 6.0) [概述, 架构]
 ```
 
 ### 指定 Group 的 Relations
@@ -241,10 +240,9 @@ ki query-group --scope <scope> --groups <group>
 | 参数 | 说明 | 必填 |
 |------|------|------|
 | `--scope` | 项目隔离标识（字母、数字、连字符、下划线） | `list-scopes` 时不需要，其他 action 必填 |
-| `--action` | create / delete / create-root / list-scopes | 否（默认 create） |
-| `--parent` | 父节点路径 | create/delete 时必填 |
-| `--name` | 节点名称 | create 时必填 |
-| `--root-name` | 根节点名称 | create-root 时必填 |
+| `--action` | create / delete / list-scopes | 否（默认 create） |
+| `--parent` | 父 Group 路径（为空时在顶层操作） | create/delete 时可选 |
+| `--name` | Group 名称 | create/delete 时必填 |
 | `--force` | 强制删除非空节点 | 否 |
 | `--group` | Group 路径 | sync-relation 时必填 |
 | `--relation` | Relation ID 或描述文本 | sync-relation 时必填 |
@@ -316,10 +314,9 @@ knowledge-index/kb/
 |------|------|------|
 | `scope "XXX" 不合法` | scope 含非法字符 | 仅使用字母、数字、连字符、下划线 |
 | `scope 含路径遍历字符` | scope 包含 `../` | 移除路径遍历字符 |
-| `父节点不存在` | `--parent` 路径错误 | 先创建父节点 |
+| `父节点不存在` | `--parent` 路径错误 | 先创建父 Group |
 | `节点非空，需 --force` | 删除非空节点未加 `--force` | 添加 `--force` 参数 |
-| `默认根节点 "项目根" 不可删除` | 尝试删除默认根节点 | 不删除，或创建新根节点 |
-| `此操作需要 --scope 参数` | `create`/`delete`/`create-root` 未传 `--scope` | 添加 `--scope`，或先用 `--action list-scopes` 确认可用 scope |
+| `此操作需要 --scope 参数` | `create`/`delete` 未传 `--scope` | 添加 `--scope`，或先用 `--action list-scopes` 确认可用 scope |
 
 ---
 
