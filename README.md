@@ -29,7 +29,7 @@
 
 ### AI Agent Skills
 
-> **`skills/`** — Agent 行为规则，按需加载。加载顺序见 [`rules/skill-load-guide.md`](./rules/skill-load-guide.md)。
+> **`skills/`** — Agent 行为规则，按需加载。加载顺序见 [`rules/ai-codekb-memory.md`](./rules/ai-codekb-memory.md)。
 
 | Skill | 场景 | 核心能力 |
 |-------|------|---------|

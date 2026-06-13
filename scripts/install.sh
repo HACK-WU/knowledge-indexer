@@ -115,7 +115,7 @@ install_rules() {
     mkdir -p "$DEST"
 
     FILES=(
-        "skill-load-guide.md"
+        "ai-codekb-memory.md"
     )
 
     echo "📋 安装 Rules → ${DEST}"
