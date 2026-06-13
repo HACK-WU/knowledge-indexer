@@ -1,6 +1,13 @@
+---
+description: 指导 AI 管理知识索引和记忆。平台内置记忆用于简洁通用偏好，ki 记忆用于详细项目知识。强制加载 ki-foundation，按需选择 codekb-skill / memory-skill。
+alwaysApply: true
+enabled: true
+updatedAt: 2026-06-13T17:10:00.000Z
+provider:
+---
 # ai-codekb-memory AI 知识与记忆管理规则
 
-> **对话开始时首先检查本规则**。指导 AI 如何管理知识索引和记忆：禁用内置记忆、加载 skill、选择存储与检索策略。
+> **对话开始时首先检查本规则**。指导 AI 如何选择记忆存储位置、加载 skill、执行检索策略。
 
 ---
 
@@ -15,46 +22,60 @@
 # monitor          — BK-Monitor 代码知识库
 # monitor-memory   — BK-Monitor 项目记忆
 # user-profile     — 用户画像（全局固定）
-#
-# TODO: 请填写你项目当前的 scope →
-#
 ```
 
 ---
 
-## 🔴 强制规则：禁用平台原生内置记忆
+## 记忆系统分工策略
 
-**禁止使用 AI 平台原生自带的内置记忆系统存储任何信息。**
+AI 拥有两套记忆系统，各有适用场景，**根据信息特征选择存储位置**：
 
-### 什么是"平台原生内置记忆"？
+### 平台内置记忆（update_memory / search_memory）
 
-指 AI 平台自身捆绑的、非用户配置的简单 KV 记忆机制。不同平台名称不同：
-CodeBuddy 的 `update_memory`、Cursor 的 `memory_store`、Claude 的 `remember`、
-Qoder 的 `search_memory`（读接口）/ `update_memory`（写接口）等。
+**适用：简洁、通用、跨项目、每次对话都需要的信息。**
 
-特征：**平台内置、非用户配置、无语义检索、无结构化组织、不可备份恢复**。
+| 特征 | 说明 |
+|------|------|
+| **简洁** | 一两句话能表达清楚 |
+| **通用** | 不依赖特定项目，跨项目适用 |
+| **高频** | 几乎每次对话都需要 |
+| **稳定** | 很少变化，一旦记住长期有效 |
 
-### ✅ 允许使用的记忆系统（不在禁止范围内）
+**典型内容**：
+- 用户沟通偏好（"用中文回复"、"简洁直接"）
+- 通用行为规则（"不要擅自提交代码"）
+- 工具使用习惯（"使用 vim 键位"）
 
-| 系统 | 说明 | 接口示例 |
-|------|------|---------|
-| **memory MCP 服务** | 用户自行配置的 memory-lancedb-mcp 服务 | `memory_recall`、`memory_store` |
+**优势**：自动注入上下文（`<memory_overview>` / `<user_preference_memory>`），零查询成本。
+
+### ki 记忆（memory-skill / codekb-skill）
+
+**适用：详细、项目特定、结构化、有时效性的信息。**
+
+| 系统 | 说明 | 接口 |
+|------|------|------|
 | **ki 命令** | knowledge-indexer CLI | `ki sync-relation`、`ki query-group` |
-| **mem CLI** | memory-lancedb-mcp 命令行 | `mem search`、`mem store`、`mem bulk-store` |
+| **memory MCP 服务** | memory-lancedb-mcp | `memory_recall`、`memory_store` |
+| **mem CLI** | memory-lancedb-mcp 命令行 | `mem search`、`mem store` |
 
-> 以上三套系统本质是同一套 memory-lancedb-mcp 体系，**均可正常使用**。
+> 以上三套本质是同一套 memory-lancedb-mcp 体系，**均可正常使用**。
 
-### 禁止 vs 允许对照
+**典型内容**：
+- 项目背景、技术栈选型、架构决策（详细、项目特定）
+- 需求进度、踩坑经验（有时效性、需要归档）
+- 代码知识：模块职责、API 接口、设计约束（结构化、需要 Group 树组织）
 
-| 禁止（平台原生） | 允许（用户配置的 memory 体系） |
-|---------|---------|
-| ❌ `search_memory`（Qoder 内置读接口） | ✅ `memory_recall`（MCP）/ `mem search`（CLI）/ `ki query-group` |
-| ❌ `update_memory`（Qoder/CodeBuddy 内置写接口） | ✅ `memory_store`（MCP）/ `mem store`（CLI）/ `ki sync-relation` |
-| ❌ 平台原生记忆接口更新（update/modify） | ✅ `memory_update`（MCP）/ `ki sync-relation` 覆盖更新 |
-| ❌ 平台原生记忆接口删除（delete/remove/forget） | ✅ `memory_forget`（MCP）/ `ki manage-index --action delete` |
-| ❌ 依赖平台自动注入的记忆上下文（`<memory_overview>`） | ✅ `memory_recall`（MCP）/ `mem search`（CLI）/ `ki query-group` 主动检索 |
+**优势**：Group 树结构化组织、热区/语义检索、Scope 隔离、归档机制。
 
-> 原因：平台原生记忆无语义检索、无结构化组织、无 Scope 隔离、不可备份恢复。用户配置的 memory 体系提供向量检索、Group 树、冷热分级、批量操作等完整能力。
+### 选择判断
+
+```
+需要记住一条信息？
+  ├─ 简洁 + 通用 + 跨项目 + 每次都需要 → 平台内置记忆
+  └─ 详细 / 项目特定 / 有时效 / 需结构化 → ki 记忆
+      ├─ 代码知识（模块/API/架构）→ codekb-skill（scope: ${scope}）
+      └─ 项目上下文/用户偏好（详细）→ memory-skill（scope: ${scope}-memory / user-profile）
+```
 
 ---
 
@@ -118,38 +139,17 @@ SKILL 加载完成后，按其内部定义的触发条件执行：
 
 | # | 红线 |
 |---|------|
-| 🔴 1 | **使用平台原生内置记忆**（非用户配置的 KV 记忆，统一用 memory MCP / ki / mem 替代） |
-| 🔴 2 | 跳过 ki-foundation 直接加载 codekb-skill / memory-skill |
-| 🔴 3 | `${scope}` 未确认就加载 SKILL 或执行 ki 命令 |
-| 🔴 4 | Skill 不存在时仍继续执行 ki 命令 |
-| 🔴 5 | **对用户画像和项目记忆使用 memory MCP 存取**（`memory_store`/`memory_recall`/`memory_update`/`memory_forget`） |
+| 🔴 1 | **将详细项目知识存入平台内置记忆**（代码知识、架构决策、项目背景等必须走 ki） |
+| 🔴 2 | **将简洁通用偏好存入 ki**（沟通语言、通用行为规则等应该用平台内置记忆） |
+| 🔴 3 | 跳过 ki-foundation 直接加载 codekb-skill / memory-skill |
+| 🔴 4 | `${scope}` 未确认就加载 SKILL 或执行 ki 命令 |
+| 🔴 5 | Skill 不存在时仍继续执行 ki 命令 |
+| 🔴 6 | **对用户画像和项目记忆使用 memory MCP 存取**（`memory_store`/`memory_recall`/`memory_update`/`memory_forget`） |
 
 ---
 
-## 🔴 规则 5 详解：用户画像 & 项目记忆 — 仅用 ki，禁用 memory MCP
+## 🔴 规则 6 详解：ki scope 禁用 memory MCP
 
-**适用范围**：`user-profile`（用户画像）和 `${scope}-memory`（项目记忆）两个 scope。
+`user-profile`、`${scope}-memory`、`${scope}` 三个 scope 由 ki 管理，**禁止通过 memory MCP / mem CLI 直接操作**（写入、查询、更新、删除均不可）。统一使用 `ki query-group` / `ki get-module-info` / `ki sync-relation` / `ki manage-index` 代替。
 
-**禁止行为**：
-
-| 禁止 | 说明 |
-|------|------|
-| ❌ `memory_store` → `user-profile` / `${scope}-memory` | 禁止通过 MCP 写入用户画像或项目记忆 |
-| ❌ `memory_recall` → `user-profile` / `${scope}-memory` | 禁止通过 MCP 查询用户画像或项目记忆 |
-| ❌ `memory_update` → `user-profile` / `${scope}-memory` | 禁止通过 MCP 更新这两类 scope |
-| ❌ `memory_forget` → `user-profile` / `${scope}-memory` | 禁止通过 MCP 删除这两类 scope |
-| ❌ `mem store/search` → 上述 scope | 同样禁止 mem CLI 操作这两类 scope |
-
-**必须使用 ki 命令代替**：
-
-| 操作 | memory MCP（禁止） | ki 命令（必须） |
-|------|-------------------|----------------|
-| 查询全景 | ❌ `memory_recall` | ✅ `ki query-group --scope user-profile --mode full` |
-| 查热门/热区 | ❌ `memory_recall` | ✅ `ki query-group --scope user-profile --groups "G" --mode hot` |
-| 读取原文 | ❌ `memory_recall` | ✅ `ki get-module-info --scope user-profile --group "G" --relation "R"` |
-| 写入/更新 | ❌ `memory_store` | ✅ `ki sync-relation --scope user-profile --group "G" --relation "R" --module-info "..."` |
-| 删除条目 | ❌ `memory_forget` | ✅ `ki manage-index --scope user-profile --action delete --force` |
-
-**原因**：用户画像和项目记忆是**纯文本结构化知识**，不依赖向量检索。ki 的 Group 树 + 热区分级 + 关键词词云足以高效命中。使用 memory MCP 反而引入不必要的语义搜索开销，且容易与代码知识库的向量数据混淆。
-
-> ⚠️ **代码知识库**（如 `monitor`）不受此限制：`memory_recall` 仍可作为四步走流程中的语义兜底步骤使用。
+> 例外：`codekb-skill` 四步走第④步的 `memory_recall` 语义兜底不受此限制。平台内置记忆（`update_memory`）不写入 ki scope，也不受此限制。
