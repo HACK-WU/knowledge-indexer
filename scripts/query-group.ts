@@ -11,25 +11,20 @@
  */
 
 import { Command } from 'commander';
-import { readJson } from './lib/store.js';
+import { readJson, ensureScopeDir, readGroupIndex } from './lib/store.js';
 import {
   getGroupIndexPath,
   getRelationsCachePath,
   validateScope,
 } from './lib/scope.js';
-import { ensureScopeDir } from './lib/store.js';
+import type { GroupIndex } from './lib/scope.js';
 import { calculateScore, partitionByScore } from './lib/scoring.js';
 import type { Relation, PartitionResult as ScoringPartitionResult } from './lib/scoring.js';
 import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
+import { resolveGroupPath } from './lib/group-resolve.js';
+import type { ResolveResult } from './lib/group-resolve.js';
 
 // ─── 类型定义 ───
-
-interface GroupIndex {
-  version: number;
-  scope: string;
-  roots: Record<string, Record<string, unknown>>;
-  updatedAt: string | null;
-}
 
 interface GroupData {
   hot_relations: Relation[];
@@ -48,7 +43,7 @@ interface RelationsCache {
 // ─── 数据加载 ───
 
 function loadGroupIndex(scope: string): GroupIndex | null {
-  return readJson<GroupIndex>(getGroupIndexPath(scope));
+  return readGroupIndex(scope);
 }
 
 function loadRelationsCache(scope: string): RelationsCache | null {
@@ -58,7 +53,7 @@ function loadRelationsCache(scope: string): RelationsCache | null {
 // ─── 树操作 ───
 
 function collectAllGroupPaths(
-  roots: Record<string, Record<string, unknown>>
+  groups: Record<string, Record<string, unknown>>
 ): string[] {
   const paths: string[] = [];
   function walk(
@@ -73,7 +68,7 @@ function collectAllGroupPaths(
       }
     }
   }
-  walk(roots, '');
+  walk(groups, '');
   return paths;
 }
 
@@ -236,7 +231,7 @@ function formatHotRelations(
 // ─── 展示：树 ───
 
 function renderTree(
-  roots: Record<string, Record<string, unknown>>,
+  groups: Record<string, Record<string, unknown>>,
   groupScores: Map<string, number>,
   partition: PartitionResult,
   depth: number,
@@ -257,20 +252,19 @@ function renderTree(
     for (const p of source) filterSet.add(p);
   }
 
-  const rootNames = Object.keys(roots);
-  rootNames.forEach((rootName, rootIdx) => {
-    const isLastRoot = rootIdx === rootNames.length - 1;
-    const rootLabel = `${rootName}/`;
-    const rootScore = groupScores.get(rootName) || 0;
-    const rootLabel2 = getPartitionLabel(rootName, partition);
+  const topNames = Object.keys(groups);
+  topNames.forEach((name, idx) => {
+    const isLast = idx === topNames.length - 1;
+    const score = groupScores.get(name) || 0;
+    const label = getPartitionLabel(name, partition);
 
-    if (!filterSet || hasVisibleDescendant(roots[rootName] as Record<string, unknown>, rootName, filterSet)) {
-      lines.push(`${rootLabel} (score: ${fmtScore(rootScore)}) ${rootLabel2}`);
+    if (!filterSet || hasVisibleDescendant(groups[name] as Record<string, unknown>, name, filterSet)) {
+      lines.push(`${name}/ (score: ${fmtScore(score)}) ${label}`);
     }
 
-    const childObj = roots[rootName] as Record<string, unknown>;
+    const childObj = groups[name] as Record<string, unknown>;
     renderTreeChildren(
-      childObj, rootName, isLastRoot ? '' : '│   ', 1, depth,
+      childObj, name, isLast ? '' : '│   ', 1, depth,
       groupScores, partition, filterSet, lines
     );
   });
@@ -344,16 +338,16 @@ function renderTreeChildren(
 }
 
 function renderCompactTree(
-  roots: Record<string, Record<string, unknown>>,
+  groups: Record<string, Record<string, unknown>>,
   depth: number
 ): string {
   const lines: string[] = [];
-  const rootNames = Object.keys(roots);
+  const topNames = Object.keys(groups);
 
-  rootNames.forEach((rootName) => {
-    lines.push(`${rootName}/`);
+  topNames.forEach((name) => {
+    lines.push(`${name}/`);
     renderCompactChildren(
-      roots[rootName] as Record<string, unknown>,
+      groups[name] as Record<string, unknown>,
       '', 1, depth, lines
     );
   });
@@ -609,18 +603,28 @@ program
       const config = relationsCache?.partition_config || DEFAULT_PARTITION_CONFIG;
       const groupsData = relationsCache?.groups || {};
 
-      // 指定 Group → 显示 Relations + 词云
+      // 指定 Group → 显示 Relations + 词云（支持路径自动补全）
       if (groupsParam) {
-        const groupPaths = groupsParam.split(',').map((s: string) => s.trim());
+        const groupPaths = groupsParam.split(',').map((s: string) => s.trim().replace(/^\/+|\/+$/g, ''));
         const results: string[] = [];
 
         for (const gp of groupPaths) {
-          const data = groupsData[gp];
-          if (!data) {
-            results.push(`=== ${gp} ===\n\n(暂无 Relations)`);
+          const resolved = resolveGroupPath(gp, groupIndex, groupsData);
+
+          if (!resolved.matched) {
+            // 未匹配：显示提示信息
+            results.push(`=== ${gp} ===\n\n(暂无 Relations)\n\n${resolved.hint}`);
             continue;
           }
-          results.push(formatGroupRelations(gp, data, now, config, hotCount, modes[0]));
+
+          const data = groupsData[resolved.resolvedPath]!;
+
+          // 有补全提示时先输出提示
+          if (resolved.hint) {
+            results.push(resolved.hint);
+          }
+
+          results.push(formatGroupRelations(resolved.resolvedPath, data, now, config, hotCount, modes[0]));
         }
 
         console.log(results.join('\n\n'));
@@ -628,7 +632,7 @@ program
       }
 
       // 完整展示格式（多分区索引 + 可选完整树 + 统计）
-      const allPaths = collectAllGroupPaths(groupIndex.roots);
+      const allPaths = collectAllGroupPaths(groupIndex.groups);
       const groupScores = getGroupAggregateScores(groupsData, now, config.halfLifeHours);
       const partition = partitionGroups(allPaths, groupScores, groupsData, now, config);
       const stats = computeStats(allPaths, partition);
@@ -659,7 +663,7 @@ program
       // 仅当 modes 包含 'full' 时展示完整索引树
       if (modes.includes('full')) {
         console.log('📁 完整索引树:');
-        console.log(renderTree(groupIndex.roots, groupScores, partition, depth, null));
+        console.log(renderTree(groupIndex.groups, groupScores, partition, depth, null));
         console.log('');
       }
 

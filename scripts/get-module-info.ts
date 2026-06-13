@@ -9,7 +9,7 @@
  */
 
 import { Command } from 'commander';
-import { readJson, writeJson, ensureScopeDir } from './lib/store.js';
+import { readJson, writeJson, ensureScopeDir, readGroupIndex } from './lib/store.js';
 import {
   getRelationsCachePath,
   getLocalKbDir,
@@ -19,6 +19,7 @@ import { recordUse, calculateScore } from './lib/scoring.js';
 import type { Relation } from './lib/scoring.js';
 import type { PartitionConfig } from './lib/constants.js';
 import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
+import { resolveGroupPath } from './lib/group-resolve.js';
 
 // ─── 类型定义 ───
 
@@ -54,7 +55,9 @@ program
   .requiredOption('--relation <relation>', 'Relation ID 或名称')
   .action(async (opts) => {
     try {
-      const { scope, group, relation } = opts;
+      const { scope, relation } = opts;
+      // 规范化 Group 路径：去除首尾斜杠
+      const group = String(opts.group).replace(/^\/+|\/+$/g, '');
 
       validateScope(scope);
       ensureScopeDir(scope);
@@ -72,32 +75,60 @@ program
         process.exit(1);
       }
 
-      // 查找 Relation
-      const groupData = cache.groups[group];
-      if (!groupData) {
+      // 读取 group-index 用于路径自动补全
+      const groupIndex = readGroupIndex(scope);
+
+      // Group 路径自动补全
+      const resolved = resolveGroupPath(group, groupIndex || { version: 1, scope, groups: {}, updatedAt: null }, cache.groups);
+
+      if (!resolved.matched) {
         output({
           ok: false,
-          error: `Group "${group}" 在 relations-cache 中不存在`,
-          hint: '请检查 Group 路径或先使用 sync-relation.ts 写入关系',
+          error: `Group "${group}" 未匹配到有效路径`,
+          hint: resolved.hint,
         });
         process.exit(1);
       }
 
+      // 补全成功时提示用户
+      if (resolved.hint) {
+        console.error(resolved.hint);
+      }
+
+      const resolvedGroup = resolved.resolvedPath;
+
+      // 查找 Group
+      const groupData = cache.groups[resolvedGroup];
+      if (!groupData) {
+        // resolveGroupPath matched=true 但 groupsData 中无数据（仅存在于 group-index 树中）
+        output({
+          ok: false,
+          error: `Group "${resolvedGroup}" 在 relations-cache 中暂无 Relation 数据`,
+          hint: '该 Group 路径存在但尚未写入知识条目，请先使用 sync-relation.ts 写入',
+        });
+        process.exit(1);
+      }
+
+      // 查找 Relation
       const rel = groupData.hot_relations.find(
         (r) => r.id === relation || r.text === relation
       );
 
       if (!rel) {
+        const availableRelations = groupData.hot_relations.map((r) => r.text);
+        const relationHint = availableRelations.length > 0
+          ? `Group "${resolvedGroup}" 中可用的 Relation：\n${availableRelations.map((r) => `  - ${r}`).join('\n')}`
+          : `Group "${resolvedGroup}" 中暂无 Relation`;
         output({
           ok: false,
-          error: `Relation "${relation}" 不存在于 Group "${group}" 中`,
-          hint: '请走检索路径或使用 sync-relation.ts 写入',
+          error: `Relation "${relation}" 不存在于 Group "${resolvedGroup}" 中`,
+          hint: relationHint,
         });
         process.exit(1);
       }
 
       // 读取本地 KB index.json
-      const localKbPath = getLocalKbDir(scope, group);
+      const localKbPath = getLocalKbDir(scope, resolvedGroup);
       const localKb = readJson<Record<string, string>>(localKbPath);
 
       if (!localKb) {
