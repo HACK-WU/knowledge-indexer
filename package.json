@@ -41,6 +41,12 @@
     "jiti": "^2.6.1",
     "zod": "^4.4.3"
   },
+  "files": [
+    "bin/**/*",
+    "scripts/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=18.0.0"
   }
