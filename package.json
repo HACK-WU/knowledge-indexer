@@ -25,7 +25,8 @@
     "test:integration": "npx jiti test/integration.test.ts",
     "test:error-handling": "npx jiti test/error-handling.test.ts",
     "test:scope-isolation": "npx jiti test/scope-isolation.test.ts",
-    "test:migrate-keywords": "npx jiti test/migrate-keywords.test.ts"
+    "test:migrate-keywords": "npx jiti test/migrate-keywords.test.ts",
+    "setup": "npx jiti scripts/setup.ts"
   },
   "keywords": [
     "knowledge",

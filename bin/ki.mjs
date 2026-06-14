@@ -30,6 +30,7 @@ const COMMANDS = {
   'import-kb': 'scripts/import-kb.ts',
   'migrate-keywords': 'scripts/migrate-keywords.ts',
   'mcp': 'scripts/mcp-server.ts',
+  'setup': 'scripts/setup.ts',
 };
 
 // 获取命令和参数
@@ -53,6 +54,7 @@ ki - AI 知识索引整理工具 (knowledge-indexer)
   import-kb         @deprecated 旧导入
   migrate-keywords  数据迁移
   mcp               启动 MCP Server (stdio 模式)
+  setup             下载 Skills / Rules 到目标项目目录
 
 示例：
   ki scan-kb import --scope my-project --results ai-results.json

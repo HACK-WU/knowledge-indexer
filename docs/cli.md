@@ -595,6 +595,77 @@ ki mcp
 
 ---
 
+## `setup`
+
+从 GitHub 下载 Skills / Rules 到目标项目目录。支持多目录批量安装。
+
+```bash
+ki setup --skills [-t <path>... | --file <path>]
+ki setup --rules [-t <path>... | --file <path>]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--skills` | 安装 AI Agent Skills（`skills/`） |
+| `--rules` | 安装加载引导规则（`rules/`） |
+| `-t, --target <path...>` | 指定目标目录（可多次使用，与 `--file` 互斥） |
+| `--file <path>` | 指定目标目录配置文件（每行一个路径，与 `-t` 互斥） |
+
+> **约束**：`--skills` 和 `--rules` 不能同时使用；`-t` 和 `--file` 不能同时使用。
+
+### 目标目录解析优先级
+
+1. `-t <path>` 命令行参数（最高优先级）
+2. `--file <path>` 指定的配置文件
+3. `~/.ki-targets` 默认配置文件（如存在）
+
+配置文件格式：每行一个绝对路径，空行和 `#` 开头的注释行忽略。
+
+**示例：单目录安装**
+
+```bash
+ki setup --skills -t ~/projects/my-app
+```
+
+输出：
+```
+🚀 ki setup --skills
+   目标来源: 命令行参数 (-t × 1)
+   目标数量: 1
+
+[1/1] 🧠 安装 Skills → /Users/me/projects/my-app
+  [OK] ki-foundation/SKILL.md
+  [OK] codekb-skill/SKILL.md
+  [OK] memory-skill/SKILL.md
+
+✅ 完成: 3/3 个文件安装成功
+```
+
+**示例：多目录安装**
+
+```bash
+ki setup --rules -t ~/projects/app-frontend -t ~/projects/app-backend
+```
+
+**示例：使用配置文件**
+
+```bash
+cat ~/.ki-targets
+# /Users/me/projects/app-frontend
+# /Users/me/projects/app-backend
+# /Users/me/projects/admin-panel
+
+ki setup --skills
+```
+
+**示例：指定配置文件**
+
+```bash
+ki setup --skills --file ~/my-targets.txt
+```
+
+---
+
 ## 常用工作流
 
 ### 本地知识沉淀
