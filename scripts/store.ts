@@ -66,4 +66,12 @@ program
     if (!result.ok) process.exit(1);
   });
 
-program.parse();
+// 仅在直接运行时解析参数（被 import 时不执行）
+const _isMain = (() => {
+  try {
+    const entry = process.argv[1];
+    if (!entry || !import.meta.url) return false;
+    return import.meta.url.endsWith(entry.replace(/\\/g, '/'));
+  } catch { return false; }
+})();
+if (_isMain) program.parse();
