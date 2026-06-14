@@ -128,8 +128,8 @@ user-profile/
 
 ```mermaid
 flowchart LR
-    A[检测到 scope] --> B[ki_query_group(scope:<br/>$scope-memory, mode: full)]
-    A --> C[ki_query_group(scope:<br/>user-profile, mode: full)]
+    A[检测到 scope] --> B[拉取项目记忆全景<br/>ki_query_group $scope-memory]
+    A --> C[拉取用户画像全景<br/>ki_query_group user-profile]
     B --> D[缓存项目记忆全景]
     C --> E[缓存用户画像全景]
     D --> F[后续查询直接用缓存]
@@ -154,7 +154,7 @@ flowchart TD
     S2 --> P
     
     P -- 是 --> F[取原文<br/>ki_get_module_info]
-    P -- 否 --> D[查该 Group 热区<br/>ki_query_group(groups: G,<br/>mode: hot,emerging)]
+    P -- 否 --> D[查该 Group 热区<br/>ki_query_group hot,emerging]
     
     D --> E{命中 relation?}
     E -- 是 --> F

@@ -110,11 +110,11 @@ flowchart TD
     Z -- 定位级 --> Z1[SearchSymbol / grep<br/>直接定位]
     Z1 --> H([结束])
     Z -- 理解级 --> B{能否从已缓存的<br/>全景索引定位Group?}
-    B -- 否 --> C[重新确认/扩大范围<br/>ki_query_group(scope, mode: full)]
+    B -- 否 --> C[重新确认/扩大范围<br/>ki_query_group full]
     C --> B
     B -- 是 --> P{全景中已明确<br/>Relation名称?}
-    P -- 是 --> F[取原文<br/>ki_get_module_info(scope, group, relation)]
-    P -- 否 --> D[查该Group热区<br/>ki_query_group(scope, groups: G,<br/>mode: hot,emerging)]
+    P -- 是 --> F[取原文<br/>ki_get_module_info]
+    P -- 否 --> D[查该Group热区<br/>ki_query_group hot,emerging]
     D --> E{命中relation?}
     E -- 是 --> F
     F --> G[提炼回答]
