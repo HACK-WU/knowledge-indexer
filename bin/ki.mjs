@@ -109,6 +109,7 @@ try {
   execFileSync('npx', ['jiti', scriptPath, ...scriptArgs], {
     stdio: 'inherit',
     cwd: PROJECT_ROOT,
+    env: { ...process.env, KI_ORIGINAL_CWD: process.cwd() },
   });
 } catch (error) {
   // 如果脚本执行失败，退出码与子进程一致

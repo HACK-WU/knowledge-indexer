@@ -79,6 +79,13 @@ async function downloadFile(url: string, dest: string): Promise<boolean> {
 }
 
 /**
+ * 获取用户的原始工作目录（ki.mjs 会将子进程 cwd 设为 PROJECT_ROOT）
+ */
+function getOriginalCwd(): string {
+  return process.env.KI_ORIGINAL_CWD || process.cwd();
+}
+
+/**
  * 解析目标目录列表
  * 优先级：-t > --file > ~/.ki-targets
  * -t 和 --file 互斥
@@ -90,9 +97,11 @@ function resolveTargets(targets: string[] | undefined, file: string | undefined)
     process.exit(1);
   }
 
-  // 1. 命令行 -t 指定
+  const originalCwd = getOriginalCwd();
+
+  // 1. 命令行 -t 指定（相对路径基于用户原始 CWD 解析）
   if (targets && targets.length > 0) {
-    const dirs = targets.map((t) => path.resolve(t));
+    const dirs = targets.map((t) => path.resolve(originalCwd, t));
     return { dirs, source: `命令行参数 (-t × ${dirs.length})` };
   }
 
