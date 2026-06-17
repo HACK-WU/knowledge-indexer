@@ -59,25 +59,38 @@ scopes:
 
 ### 5. 确定 KB 存储位置
 
-不同 scope 的 KB 数据可以独立配置存储目录。在确定 scope 后，需要询问用户选择存储位置：
+不同 scope 的 KB 数据可以独立配置存储目录。在确定 scope 后，需要询问用户选择存储位置（例如："KB 数据存储位置使用默认路径还是自定义路径？"）；若用户选择自定义，引导其编辑 `~/.ki/config.json` 添加 `kbDir` 字段。
 
-- **默认位置**：使用 `dataDir` 配置的全局默认目录（`~/.ki/data`）
+- **默认位置**：使用 `~/.ki/config.json` 中 `dataDir` 配置的全局默认目录
 - **自定义位置**：为该 scope 单独指定存储路径
 
-自定义方式如下，在 scope 配置中添加 `dataDir` 字段：
+自定义方式如下，在 `~/.ki/config.json` 的 scope 配置中添加 `kbDir` 字段：
 
-```yaml
-scopes:
-  definitions:
-    your-scope:
-      description: your scope description
-      acl:
-        - global
-        - your-scope
-      dataDir: /path/to/custom/data
+```json
+{
+  "dataDir": "$HOME/.ki-data",
+  "backupDir": "$HOME/.ki-backup",
+  "scopes": {
+    "your-scope": {
+      "kbDir": "/path/to/custom/data",
+      "wikiSync": {
+        "enabled": true,
+        "sourceDir": "/path/to/wiki-output"
+      }
+    }
+  }
+}
 ```
 
-> **注意**：如果 scope 已有数据，修改 `dataDir` 后需要手动迁移或重新导入。
+| 字段 | 说明 |
+|------|------|
+| `dataDir` | 全局默认存储目录，未配置 `kbDir` 的 scope 数据放在 `dataDir/{scope}/` 下 |
+| `backupDir` | 备份快照目录 |
+| `kbDir` | scope 级自定义 KB 存储路径，覆盖全局 `dataDir` |
+| `wikiSync.enabled` | 是否在 `sync-relation` 写入后同步到外部 Wiki 目录 |
+| `wikiSync.sourceDir` | Wiki 写回目标目录（source 块导入后优先使用 source 目录） |
+
+> **注意**：如果 scope 已有数据，修改 `kbDir` 后需要手动迁移或重新导入。
 
 ## 执行流程
 
@@ -358,6 +371,8 @@ ki scan-kb import \
 当配置了 `wikiSync` 时，通过 `sync-relation` 写入的知识条目会自动同步到外部 Wiki 目录。
 
 ### 配置方式
+
+> `wikiSync` 与 `kbDir` 均在同一个 `~/.ki/config.json` 的 scope 配置中设置，完整配置文件结构参见[前置条件第 5 步](#5-确定-kb-存储位置)。
 
 在 scope 配置中添加 `wikiSync`：
 

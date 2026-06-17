@@ -666,6 +666,18 @@ ki config init
 }
 ```
 
+**字段说明**：
+
+| 字段 | 层级 | 说明 |
+|------|------|------|
+| `dataDir` | 顶级 | 全局默认数据存储目录，各 scope 数据默认放在 `dataDir/{scope}/` 下 |
+| `backupDir` | 顶级 | 备份快照存储目录 |
+| `scopes.<scope>.kbDir` | scope | 覆盖该 scope 的 KB 数据存储路径，优先级高于 `dataDir/{scope}` |
+| `scopes.<scope>.sourceDir` | scope | 外部知识库源目录（由 `scan-kb import` 自动记录） |
+| `scopes.<scope>.rootName` | scope | 导入根节点名称（由 `scan-kb import` 自动记录） |
+| `scopes.<scope>.wikiSync.enabled` | scope | 是否启用 Wiki 写回（默认 `true`） |
+| `scopes.<scope>.wikiSync.sourceDir` | scope | Wiki 写回目标目录 |
+
 **配置优先级**：
 1. `--config <path>` 命令行参数
 2. `$HOME/.ki/config.json`
