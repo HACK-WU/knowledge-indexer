@@ -98,7 +98,7 @@ scopes:
    - **文件名**：推导 Relation 文本
    - **文档开头**：仅读取前 10-20 行，提取标题、摘要或目录
    - **YAML 前置元数据**：如有 `title`、`description`、`tags` 等字段
-3. **生成摘要**：基于上述轻量信息，用 1-2 句话概括核心内容
+3. **生成摘要**：基于上述轻量信息，用 1-2 句话概括核心内容（最多 500 字）
 4. **提取关键词**：从标题、路径、前几行中提取 3-5 个自然语言关键词
 5. **推导分组路径**：根据目录结构推导 Group 路径
 6. **生成条目**：为每个文件创建一个 entry
@@ -164,7 +164,7 @@ content/
 | `entries[].path` | 是 | 相对 `meta.sourceDir` 的 posix 路径 |
 | `entries[].groupPath` | 否 | Group 完整路径（含 rootName 前缀）；缺失时从 `path` 推导 |
 | `entries[].relation` | 否 | Relation 文本；缺失时从文件名推导 |
-| `entries[].summary` | 否 | 3~5 句摘要 |
+| `entries[].summary` | 否 | 1-2 句摘要，最多 500 字 |
 | `entries[].keywords` | 否 | 自然语言关键词数组 |
 | `entries[].action` | 否 | 操作语义：`add`（默认）/ `modify` / `delete` |
 | `entries[].memoryId` | 条件 | `modify`/`delete` 时必填；首次导入由系统填充 |
@@ -224,6 +224,7 @@ ki scan-kb import \
     "vectorized": 25,
     "errors": 0
   },
+  "errors": [],
   "groups": ["MyProject", "MyProject/API", "MyProject/前端"],
   "source": {
     "dir": "/path/to/wiki",
@@ -284,6 +285,7 @@ ki scan-kb import \
 | `meta.sourceDir 不存在` | 源目录路径错误 | 确认目录存在且路径正确 |
 | `groupPath 首段必须等于 rootName` | Group 路径格式错误 | 确保 `groupPath` 以 `rootName` 开头 |
 | `mem store 失败` | mem 命令未安装或配置错误 | 安装 mem 命令，检查 API 密钥配置 |
+| `source.dir 不在 git 仓库中` | 源目录未初始化 Git | 执行 `git init` 并至少提交一次 |
 
 ---
 
