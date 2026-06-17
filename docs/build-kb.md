@@ -224,14 +224,16 @@ ki scan-kb import \
     "vectorized": 25,
     "errors": 0
   },
-  "autoBackup": {
-    "enabled": true,
-    "path": "/path/to/backup/snapshot.20260101-120000.tar.gz"
+  "groups": ["MyProject", "MyProject/API", "MyProject/前端"],
+  "source": {
+    "dir": "/path/to/wiki",
+    "rootName": "MyProject",
+    "commit": "abc123..."
   }
 }
 ```
 
-> **自动备份**：导入成功后，系统会自动创建 scope 快照备份，保存在 `~/.ki-backup/<scope>/snapshots/` 目录下。备份文件为 `.tar.gz` 格式，可用于后续还原。
+> **自动备份**：导入成功后，系统会自动创建 scope 快照备份（输出到 stderr）。备份文件保存在 `~/.ki-backup/<scope>/snapshots/` 目录下，格式为 `.tar.gz`，可用于后续还原。
 
 ---
 
