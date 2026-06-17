@@ -20,8 +20,10 @@ const ORIGINAL_PATH = process.env.PATH;
 process.env.PATH = `${MOCK_BIN_DIR}:${ORIGINAL_PATH}`;
 
 import { handleImport } from '../scripts/lib/import.ts';
-import { ensureScopeDir, readJson } from '../scripts/lib/store.ts';
+import { ensureScopeDir, readJson, initScope } from '../scripts/lib/store.ts';
 import { getKbDir, getGroupIndexPath, getRelationsCachePath, getSource } from '../scripts/lib/scope.ts';
+import { registerTestScope, cleanupTestConfig } from './test-config.ts';
+import { resetMemScopesCache } from '../scripts/lib/mem-client.ts';
 
 // 准备测试 fixture：一个真实的临时 git 仓库 + 几个 .md 文件
 function makeFixtureRepo() {
@@ -50,13 +52,17 @@ function makeAiResults(sourceDir, entries) {
 }
 
 const TEST_SCOPE = 's04-test-' + Date.now();
+registerTestScope(TEST_SCOPE);
+initScope(TEST_SCOPE);
+process.env.MOCK_SCOPES = TEST_SCOPE;  // mock-mem scope list 返回测试 scope
+resetMemScopesCache();  // 清除缓存，确保重新读取
 
 function cleanup() {
   const dir = getKbDir(TEST_SCOPE);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
 }
 
-test('S-04: full 模式导入 3 个文件，全部成功', () => {
+test('S-04: full 模式导入 3 个文件，全部成功', async () => {
   cleanup();
   const sourceDir = makeFixtureRepo();
   const resultsFile = makeAiResults(sourceDir, [
@@ -65,7 +71,7 @@ test('S-04: full 模式导入 3 个文件，全部成功', () => {
     { path: 'API文档/认证.md', groupPath: 'wiki/API文档', summary: 's3', keywords: ['认证', 'API'] },
   ]);
 
-  const result = handleImport({ scope: TEST_SCOPE, resultsFile });
+  const result = await handleImport({ scope: TEST_SCOPE, resultsFile });
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'full');
@@ -84,9 +90,9 @@ test('S-04: full 模式导入 3 个文件，全部成功', () => {
   const persisted = getSource(TEST_SCOPE);
   assert.deepEqual(persisted, result.source);
 
-  // group-index roots 树结构
+  // group-index groups 树结构
   const idx = readJson(getGroupIndexPath(TEST_SCOPE));
-  assert.deepEqual(Object.keys(idx.roots.wiki).sort(), ['API文档', '部署运维']);
+  assert.deepEqual(Object.keys(idx.groups.wiki).sort(), ['API文档', '部署运维']);
 
   // relations-cache 含 memoryId + sourcePath
   const cache = readJson(getRelationsCachePath(TEST_SCOPE));
@@ -108,7 +114,7 @@ test('S-04: full 模式导入 3 个文件，全部成功', () => {
   fs.unlinkSync(resultsFile);
 });
 
-test('S-04: 部分向量化失败时，失败条目不写入索引', () => {
+test('S-04: 部分向量化失败时，失败条目不写入索引', async () => {
   cleanup();
   const sourceDir = makeFixtureRepo();
   const resultsFile = makeAiResults(sourceDir, [
@@ -117,7 +123,7 @@ test('S-04: 部分向量化失败时，失败条目不写入索引', () => {
   ]);
   process.env.MOCK_FAIL_PATHS = 'fail-me-now';
 
-  const result = handleImport({ scope: TEST_SCOPE, resultsFile });
+  const result = await handleImport({ scope: TEST_SCOPE, resultsFile });
 
   delete process.env.MOCK_FAIL_PATHS;
 
@@ -137,22 +143,22 @@ test('S-04: 部分向量化失败时，失败条目不写入索引', () => {
   fs.unlinkSync(resultsFile);
 });
 
-test('S-04: meta.sourceDir 不存在应抛错', () => {
+test('S-04: meta.sourceDir 不存在应抛错', async () => {
   cleanup();
   const resultsFile = makeAiResults('/tmp/__nonexistent_kb__', [
     { path: 'a.md', groupPath: 'wiki', summary: 's', keywords: [] },
   ]);
-  assert.throws(() => handleImport({ scope: TEST_SCOPE, resultsFile }), /sourceDir 不存在/);
+  await assert.rejects(() => handleImport({ scope: TEST_SCOPE, resultsFile }), /sourceDir 不存在/);
   cleanup();
   fs.unlinkSync(resultsFile);
 });
 
-test('S-04: 空 entries 也能成功（创建 root group + source）', () => {
+test('S-04: 空 entries 也能成功（创建 root group + source）', async () => {
   cleanup();
   const sourceDir = makeFixtureRepo();
   const resultsFile = makeAiResults(sourceDir, []);
 
-  const result = handleImport({ scope: TEST_SCOPE, resultsFile });
+  const result = await handleImport({ scope: TEST_SCOPE, resultsFile });
   assert.equal(result.stats.total, 0);
   assert.equal(result.stats.vectorized, 0);
   assert.deepEqual(result.groups, ['wiki']);
@@ -163,7 +169,7 @@ test('S-04: 空 entries 也能成功（创建 root group + source）', () => {
   fs.unlinkSync(resultsFile);
 });
 
-test('S-04: mapping 模式覆盖 groupPath 与 relation', () => {
+test('S-04: mapping 模式覆盖 groupPath 和 relation', async () => {
   cleanup();
   const sourceDir = makeFixtureRepo();
   const resultsFile = makeAiResults(sourceDir, [
@@ -178,7 +184,7 @@ test('S-04: mapping 模式覆盖 groupPath 与 relation', () => {
     }],
   }));
 
-  const result = handleImport({ scope: TEST_SCOPE, resultsFile, mappingFile });
+  const result = await handleImport({ scope: TEST_SCOPE, resultsFile, mappingFile });
   assert.ok(result.groups.includes('wiki/自定义分组'));
 
   const cache = readJson(getRelationsCachePath(TEST_SCOPE));

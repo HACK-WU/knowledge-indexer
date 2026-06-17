@@ -31,6 +31,7 @@ import type { Relation } from './scoring.js';
 
 import { normalizeAiResults, type AiResultsFile, type ScanResultEntry } from './ai-results.js';
 import { bulkVectorize, type BatchVectorizeResult } from './batch-vectorize.js';
+import { ensureMemScope } from './mem-client.js';
 import {
   buildGroupPathContent,
   buildRelationContent,
@@ -45,6 +46,7 @@ import {
   type ProgressEntry,
   logPhaseStart,
   logPhaseDone,
+  logProgress,
   logInfo,
   logSummary,
 } from './progress.js';
@@ -327,16 +329,16 @@ function phase1Validate(args: HandleImportArgs): {
 }
 
 /** Phase 2: 批量向量化（使用 bulk-store + 断点续跑）*/
-function phase2Vectorize(
+async function phase2Vectorize(
   entries: ScanResultEntry[],
   scope: string,
   rootName: string,
   totalPhases: number
-): {
+): Promise<{
   vec: BatchVectorizeResult;
   skippedFromProgress: Map<string, string>; // path → memoryId（从进度文件恢复的）
   newProgressEntries: ProgressEntry[];
-} {
+}> {
   const skippedFromProgress = new Map<string, string>();
   const newProgressEntries: ProgressEntry[] = [];
 
@@ -371,7 +373,7 @@ function phase2Vectorize(
     vec = { ok: new Map(), errors: [] };
     logPhaseDone(2, totalPhases, `全部已跳过，无需向量化`);
   } else {
-    vec = bulkVectorize(needVectorize, scope, { timeoutMs: 60_000 + needVectorize.length * 10_000 });
+    vec = await bulkVectorize(needVectorize, scope, { timeoutMs: 60_000 + needVectorize.length * 10_000 });
 
     // 构建新完成的进度条目
     for (const [p, mid] of vec.ok) {
@@ -415,7 +417,11 @@ function phase3EnsureGroups(
     const target = ctx.mapping?.get(e.path);
     const groupPath = target ? target.groupPath : e.groupPath;
     ensureGroupPathInTree(groupIndex, groupPath);
-    ctx.groups.add(groupPath);
+    // 将完整路径及所有父级都加入 groups（如 'wiki/部署运维' → 'wiki' + 'wiki/部署运维'）
+    const segments = groupPath.split('/').filter(Boolean);
+    for (let i = 1; i <= segments.length; i++) {
+      ctx.groups.add(segments.slice(0, i).join('/'));
+    }
   }
 }
 
@@ -424,8 +430,11 @@ function phase4WriteRelations(
   ctx: ImportContext,
   cache: RelationsCache
 ): void {
-  for (const e of ctx.entries) {
+  const total = ctx.entries.length;
+  for (let i = 0; i < ctx.entries.length; i++) {
+    const e = ctx.entries[i];
     if (e.action === 'delete') continue;
+    logProgress(i + 1, total, e.path);
     const memoryId = ctx.memoryMap.get(e.path) || e.memoryId || null;
 
     const target = ctx.mapping?.get(e.path);
@@ -469,9 +478,12 @@ function phase5RecordSource(scope: string, sourceDir: string, rootName: string):
 
 const TOTAL_PHASES = 5;
 
-export function handleImport(args: HandleImportArgs): ImportResult {
+export async function handleImport(args: HandleImportArgs): Promise<ImportResult> {
   // 0) 准备 scope 目录
   ensureScopeDir(args.scope);
+
+  // 0.5) 校验 mem 中是否已注册该 scope
+  ensureMemScope(args.scope);
 
   // Phase 1: 校验 + 归一化
   logPhaseStart(1, TOTAL_PHASES, '校验 ai-results.json ...');
@@ -480,7 +492,7 @@ export function handleImport(args: HandleImportArgs): ImportResult {
   logPhaseDone(1, TOTAL_PHASES, `校验通过，共 ${total} 条条目，rootName="${results.meta.rootName}"`);
 
   // Phase 2: 批量向量化（含断点续跑）
-  const { vec, skippedFromProgress } = phase2Vectorize(
+  const { vec, skippedFromProgress } = await phase2Vectorize(
     results.entries,
     args.scope,
     results.meta.rootName,
@@ -527,9 +539,7 @@ export function handleImport(args: HandleImportArgs): ImportResult {
   if (pathEntries.length > 0) {
     logInfo(`写入路径向量索引（${pathEntries.length} 条）...`);
     const pathResult = bulkStorePaths(pathEntries);
-    if (pathResult.errors.length > 0) {
-      logInfo(`路径向量写入：成功 ${pathResult.ok.size}，失败 ${pathResult.errors.length}`);
-    }
+    logInfo(`路径向量写入完成：成功 ${pathResult.ok.size}，失败 ${pathResult.errors.length}`);
   }
 
   const ctx: ImportContext = {
@@ -538,7 +548,7 @@ export function handleImport(args: HandleImportArgs): ImportResult {
     rootName: results.meta.rootName,
     entries: results.entries,
     memoryMap: mergedMap,
-    groups: new Set<string>(),
+    groups: new Set<string>([results.meta.rootName]),  // rootName 始终存在
     mapping,
   };
 

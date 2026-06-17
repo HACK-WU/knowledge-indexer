@@ -183,7 +183,7 @@ async function restoreFromSnapshot(
 
 // ─── from-results 重放 ───
 
-function restoreFromResults(scope: string, opts: { dir?: string }): void {
+async function restoreFromResults(scope: string, opts: { dir?: string }): Promise<void> {
   const config = loadConfig();
   const backupDir = getBackupDir(config);
 
@@ -259,9 +259,9 @@ function restoreFromResults(scope: string, opts: { dir?: string }): void {
 
     try {
       if (mode === 'full') {
-        handleImport({ scope, resultsFile: filePath });
+        await handleImport({ scope, resultsFile: filePath });
       } else {
-        handleIncremental({ scope, resultsFile: filePath });
+        await handleIncremental({ scope, resultsFile: filePath });
       }
       replayed.push({ file, mode, status: 'ok' });
     } catch (err) {
@@ -355,7 +355,7 @@ async function main() {
     if (fromSnapshot) {
       await restoreFromSnapshot(scope, { timestamp, yes: skipYes });
     } else if (fromResults) {
-      restoreFromResults(scope, { dir });
+      await restoreFromResults(scope, { dir });
     } else {
       listAvailableBackups(scope);
     }

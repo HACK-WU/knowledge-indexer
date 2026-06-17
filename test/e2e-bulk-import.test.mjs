@@ -18,6 +18,8 @@ import url from 'node:url';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
+import { registerTestScope, getTestEnv } from './test-config.ts';
+
 // ─── 工具函数 ─────────────────────────────────────────────
 
 const GIT_ENV = ' -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c tag.gpgsign=false ';
@@ -55,6 +57,7 @@ function runImport(scope, resultsFile, mode = 'full') {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 120_000,
+    env: getTestEnv(),
   });
   return JSON.parse(stdout);
 }
@@ -75,6 +78,7 @@ function getProgressFilePath(scope) {
 // ─── 测试 ─────────────────────────────────────────────────
 
 const TEST_SCOPE = 'e2e-bulk-' + Date.now();
+registerTestScope(TEST_SCOPE);
 
 describe('E2E: bulk-store 全量导入', () => {
   let sourceDir;
@@ -145,6 +149,7 @@ describe('E2E: bulk-store 增量导入', () => {
   let baseCommit;
 
   const SCOPE = TEST_SCOPE + '-inc';
+  registerTestScope(SCOPE);
 
   before(() => {
     sourceDir = makeRepo({

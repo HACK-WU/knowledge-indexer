@@ -133,9 +133,10 @@ if (configPath) {
 
 try {
   // 使用 jiti 执行 TypeScript 脚本
+  // cwd 设为用户当前目录，确保相对路径参数（如 --results）正确解析
   execFileSync('npx', ['jiti', scriptPath, ...scriptArgs], {
     stdio: 'inherit',
-    cwd: PROJECT_ROOT,
+    cwd: process.cwd(),
     env: childEnv,
   });
 } catch (error) {

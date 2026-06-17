@@ -9,13 +9,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 const SCRIPTS_DIR = path.resolve(import.meta.dirname, '..', 'scripts');
 
 function runJson(script: string, args: string[]): any {
   try {
     const out = execFileSync('npx', ['jiti', path.join(SCRIPTS_DIR, script), ...args], {
-      encoding: 'utf-8', env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      encoding: 'utf-8', env: getTestEnv(),
     });
     return JSON.parse(out.trim());
   } catch (err: any) { try { return JSON.parse((err.stdout || '{}').trim()); } catch { return { ok: false }; } }
@@ -24,7 +25,7 @@ function runJson(script: string, args: string[]): any {
 function getOut(script: string, args: string[]): string {
   try {
     return execFileSync('npx', ['jiti', path.join(SCRIPTS_DIR, script), ...args], {
-      encoding: 'utf-8', env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      encoding: 'utf-8', env: getTestEnv(),
     });
   } catch (err: any) { return err.stdout || ''; }
 }
@@ -32,7 +33,7 @@ function getOut(script: string, args: string[]): string {
 const createdScopes: string[] = [];
 const tempDirs: string[] = [];
 let n = 0;
-function mkScope(p: string) { const s = `${p}-${Date.now()}-${++n}`; createdScopes.push(s); return s; }
+async function mkScope(p: string) { const s = `${p}-${Date.now()}-${++n}`; registerTestScope(s); createdScopes.push(s); const { initScope } = await import('../scripts/lib/store.js'); initScope(s); return s; }
 function mkTmp(p: string) { const d = fs.mkdtempSync(path.join(os.tmpdir(), `${p}-`)); tempDirs.push(d); return d; }
 
 function getKbDirSync(scope: string): string {
@@ -43,15 +44,16 @@ function getKbDirSync(scope: string): string {
 after(() => {
   for (const s of createdScopes) { const d = getKbDirSync(s); if (fs.existsSync(d)) fs.rmSync(d, { recursive: true, force: true }); }
   for (const d of tempDirs) { if (fs.existsSync(d)) fs.rmSync(d, { recursive: true, force: true }); }
+  cleanupTestConfig();
 });
 
 describe('scope 物理隔离', () => {
   it('相同 Group 名在不同 scope 下独立存储', async () => {
-    const sA = mkScope('iso-a');
-    const sB = mkScope('iso-b');
+    const sA = await mkScope('iso-a');
+    const sB = await mkScope('iso-b');
 
-    runJson('manage-index.ts', ['--scope', sA, '--action', 'create-root', '--root-name', 'wiki']);
-    runJson('manage-index.ts', ['--scope', sB, '--action', 'create-root', '--root-name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sA, '--action', 'create', '--name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sB, '--action', 'create', '--name', 'wiki']);
 
     // scope A: sync relation
     runJson('sync-relation.ts', ['--scope', sA, '--group', 'wiki/监控', '--relation', '告警-A', '--module-info', '# A\nA内容', '--keywords', 'A']);
@@ -66,11 +68,11 @@ describe('scope 物理隔离', () => {
   });
 
   it('相同 Relation 名在独立 scope 下不串读', async () => {
-    const sA = mkScope('iso-rel-a');
-    const sB = mkScope('iso-rel-b');
+    const sA = await mkScope('iso-rel-a');
+    const sB = await mkScope('iso-rel-b');
 
-    runJson('manage-index.ts', ['--scope', sA, '--action', 'create-root', '--root-name', 'wiki']);
-    runJson('manage-index.ts', ['--scope', sB, '--action', 'create-root', '--root-name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sA, '--action', 'create', '--name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sB, '--action', 'create', '--name', 'wiki']);
 
     runJson('sync-relation.ts', ['--scope', sA, '--group', 'wiki/config', '--relation', 'DB', '--module-info', '# DB A\nscope A 的数据库', '--keywords', 'DB,A']);
     runJson('sync-relation.ts', ['--scope', sB, '--group', 'wiki/config', '--relation', 'DB', '--module-info', '# DB B\nscope B 的数据库', '--keywords', 'DB,B']);
@@ -88,11 +90,11 @@ describe('scope 物理隔离', () => {
 
   it('磁盘路径隔离', async () => {
     const { getKbDir } = await import('../scripts/lib/scope.js');
-    const sA = mkScope('iso-disk-a');
-    const sB = mkScope('iso-disk-b');
+    const sA = await mkScope('iso-disk-a');
+    const sB = await mkScope('iso-disk-b');
 
-    runJson('manage-index.ts', ['--scope', sA, '--action', 'create-root', '--root-name', 'wiki']);
-    runJson('manage-index.ts', ['--scope', sB, '--action', 'create-root', '--root-name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sA, '--action', 'create', '--name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sB, '--action', 'create', '--name', 'wiki']);
 
     const dirA = getKbDir(sA);
     const dirB = getKbDir(sB);
@@ -103,12 +105,12 @@ describe('scope 物理隔离', () => {
 
   it('删除操作互不影响', async () => {
     const { getGroupIndexPath } = await import('../scripts/lib/scope.js');
-    const sA = mkScope('iso-del-a');
-    const sB = mkScope('iso-del-b');
+    const sA = await mkScope('iso-del-a');
+    const sB = await mkScope('iso-del-b');
 
-    runJson('manage-index.ts', ['--scope', sA, '--action', 'create-root', '--root-name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sA, '--action', 'create', '--name', 'wiki']);
     runJson('manage-index.ts', ['--scope', sA, '--action', 'create', '--parent', 'wiki', '--name', 'to-delete']);
-    runJson('manage-index.ts', ['--scope', sB, '--action', 'create-root', '--root-name', 'wiki']);
+    runJson('manage-index.ts', ['--scope', sB, '--action', 'create', '--name', 'wiki']);
     runJson('manage-index.ts', ['--scope', sB, '--action', 'create', '--parent', 'wiki', '--name', 'to-delete']);
 
     // 删除 scope A 中的节点
@@ -117,16 +119,16 @@ describe('scope 物理隔离', () => {
     // scope B 中仍应有 'to-delete'
     const { readJson } = await import('../scripts/lib/store.js');
     const idxB = readJson<any>(getGroupIndexPath(sB));
-    assert.ok(idxB.roots.wiki['to-delete'] !== undefined);
+    assert.ok(idxB.groups.wiki['to-delete'] !== undefined);
 
     // scope A 中应已删除
     const idxA = readJson<any>(getGroupIndexPath(sA));
-    assert.strictEqual(idxA.roots.wiki['to-delete'], undefined);
+    assert.strictEqual(idxA.groups.wiki['to-delete'], undefined);
   });
 
   it('scan-kb 和 import-kb 在不同 scope 下隔离', async () => {
-    const sA = mkScope('iso-scan-a');
-    const sB = mkScope('iso-scan-b');
+    const sA = await mkScope('iso-scan-a');
+    const sB = await mkScope('iso-scan-b');
     const src = mkTmp('iso-src');
 
     fs.writeFileSync(path.join(src, 'doc.md'), '# doc\ncontent');

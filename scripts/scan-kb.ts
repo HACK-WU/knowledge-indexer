@@ -361,7 +361,7 @@ function buildIncrementalPending(
   if (!existing.lastScannedCommit) return null;
 
   try {
-    const relativeSource = toPosix(path.relative(gitInfo.repoRoot, sourceDir)) || '.';
+    const relativeSource = toPosix(path.relative(gitInfo.repoRoot, fs.realpathSync(sourceDir))) || '.';
     const raw = execFileSync(
       'git',
       ['-C', gitInfo.repoRoot, 'diff', '--name-status', existing.lastScannedCommit, gitInfo.head, '--', relativeSource],
@@ -378,8 +378,10 @@ function buildIncrementalPending(
     let deleted = 0;
 
     // 把 repo 内绝对/相对路径转换为相对 sourceDir 的 posix 路径，越界返回 null
+    // 使用 realpathSync 解决 macOS /var vs /private/var 符号链接导致 path.relative 失败的问题
+    const resolvedSource = fs.realpathSync(sourceDir);
     const toSourceRel = (changedPath: string): string | null => {
-      const rel = toPosix(path.relative(sourceDir, path.join(gitInfo.repoRoot, changedPath)));
+      const rel = toPosix(path.relative(resolvedSource, path.join(gitInfo.repoRoot, changedPath)));
       if (rel.startsWith('..')) return null;
       return rel;
     };
@@ -768,7 +770,7 @@ program
   .option('--source-dir <sourceDir>', '强制覆盖 ai-results.meta.sourceDir（一般无需传）')
   .option('--root-name <rootName>', '强制覆盖 ai-results.meta.rootName（一般无需传）')
   .option('--mapping <mappingFile>', 'mapping 配置文件路径（覆盖 groupPath / relation）')
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const scope = String(opts.scope);
       const resultsFile = path.resolve(String(opts.results));
@@ -780,7 +782,7 @@ program
       validateScope(scope);
 
       if (mode === 'full') {
-        const result = handleImport({
+        const result = await handleImport({
           scope,
           resultsFile,
           sourceDirOverride,
@@ -802,7 +804,7 @@ program
       }
 
       if (mode === 'incremental') {
-        const result = handleIncremental({
+        const result = await handleIncremental({
           scope,
           resultsFile,
           sourceDirOverride,

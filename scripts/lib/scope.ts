@@ -214,8 +214,10 @@ export function listAllScopes(): string[] {
   }
 
   // 2. 合并 config.scopes 中配置的自定义 kbDir 的 scope
-  for (const [name, sc] of Object.entries(config.scopes)) {
-    if (sc.kbDir && fs.existsSync(path.join(sc.kbDir, 'relations-cache.json'))) {
+  for (const name of Object.keys(config.scopes)) {
+    // 复用 getKbDir 统一路径计算，避免硬编码
+    const kbScopeDir = getKbDir(name);
+    if (fs.existsSync(path.join(kbScopeDir, 'relations-cache.json'))) {
       scopeSet.add(name);
     }
   }

@@ -11,7 +11,8 @@
  *   - 不处理 action=delete 条目（调用方过滤）
  */
 
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -179,102 +180,150 @@ export function bulkVectorize(
   entries: ScanResultEntry[],
   scope: string,
   options: BatchVectorizeOptions = {}
-): BatchVectorizeResult {
-  const ok = new Map<string, string>();
-  const errors: { path: string; error: string }[] = [];
+): Promise<BatchVectorizeResult> {
+  return new Promise((resolve) => {
+    const ok = new Map<string, string>();
+    const errors: { path: string; error: string }[] = [];
 
-  if (entries.length === 0) return { ok, errors };
+    if (entries.length === 0) { resolve({ ok, errors }); return; }
 
-  const category = options.category || DEFAULT_CATEGORY;
-  // bulk-store 耗时 = 条目数 × 1~3s，超时需要更宽裕
-  const timeout = options.timeoutMs
-    || parseInt(process.env.MEM_BULK_TIMEOUT_MS || '', 10)
-    || (60_000 + entries.length * 10_000);
+    const category = options.category || DEFAULT_CATEGORY;
+    const timeout = options.timeoutMs
+      || parseInt(process.env.MEM_BULK_TIMEOUT_MS || '', 10)
+      || (60_000 + entries.length * 10_000);
 
-  // 1) 构建批量存储的 JSON 数组
-  const bulkEntries = entries.map((entry) => ({
-    text: buildVectorizeContent(entry),
-    tags: 'ki-search',
-    category,
-    scope,
-  }));
+    // 1) 构建批量存储的 JSON 数组
+    const bulkEntries = entries.map((entry) => ({
+      text: buildVectorizeContent(entry),
+      tags: 'ki-search',
+      category,
+      scope,
+    }));
 
-  // 2) 写入临时文件
-  const tmpFile = path.join(os.tmpdir(), `mem-bulk-${scope}-${Date.now()}.json`);
-  try {
-    fs.writeFileSync(tmpFile, JSON.stringify(bulkEntries), 'utf-8');
-
-    // 3) 调用 mem bulk-store
-    //    stdio: ['ignore', 'pipe', 'inherit']
-    //    - stdout piped → 捕获 JSON 结果
-    //    - stderr inherited → 用户可看到 bulk-store 的原生进度输出
-    const stdout = execFileSync(
-      'mem',
-      ['bulk-store', '-f', tmpFile, '--json', '--scope', scope],
-      {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'inherit'],
-        timeout,
-        maxBuffer: 10 * 1024 * 1024, // 10MB，足够容纳大量条目的 JSON 结果
+    // 2) 写入临时文件
+    const tmpFile = path.join(os.tmpdir(), `mem-bulk-${scope}-${Date.now()}.json`);
+    try {
+      fs.writeFileSync(tmpFile, JSON.stringify(bulkEntries), 'utf-8');
+    } catch (err) {
+      const e = err as Error;
+      for (const entry of entries) {
+        errors.push({ path: entry.path, error: `写入临时文件失败: ${e.message}` });
       }
-    );
+      resolve({ ok, errors });
+      return;
+    }
 
-    // 4) 解析 JSON 结果
-    //    bulk-store --json 可能先输出人类可读进度到 stderr，stdout 只输出 JSON
-    //    但防御性地处理 stdout 中可能混入的非 JSON 行
-    const jsonStr = extractJsonObject(stdout);
-    const result = JSON.parse(jsonStr) as BulkStoreJsonResult;
+    // 3) 使用 spawn 异步执行 mem bulk-store（不带 --json）
+    //    mem 的正常进度行输出到 stdout：[1/5] ✅ 内容 → memoryId
+    //    逐行实时转发到终端，同时解析 index + memoryId 构建结果。
+    const child = spawn('mem', ['bulk-store', '-f', tmpFile, '--scope', scope], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
+    });
 
-    // 5) 映射 index → entry path
-    for (const item of result.details.ok) {
-      const entry = entries[item.index];
-      if (entry) {
-        ok.set(entry.path, item.id);
+    let stderrBuf = '';  // 环形缓冲：只保留最后 4000 字节，用于错误诊断
+    let stdoutLineBuf = '';
+    // 匹配进度状态行: [1/137] ✅ ...  或  [4/5] ❌ ...
+    // 只判断成功/失败，不提取 memoryId（搜索不依赖 ID，断点续跑只看 path）
+    const STATUS_PATTERN = /^\[(\d+)\/\d+\]\s+(✅|❌|⏭️)/;
+    // 收集每条的结果: index → { ok, error? }
+    const perEntryResults = new Map<number, { ok: boolean; error?: string }>();
+
+    // 实时转发 stderr 到终端（环形缓冲：只保留最后 4000 字节，确保真正的错误信息不被截断）
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderrBuf += text;
+      if (stderrBuf.length > 4000) {
+        stderrBuf = stderrBuf.slice(stderrBuf.length - 4000);
+      }
+      process.stderr.write(text);
+    });
+
+    // 逐行处理 stdout，实时显示进度
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      const lines = text.split('\n');
+      stdoutLineBuf += lines[0];
+      for (let i = 1; i < lines.length; i++) {
+        processLine(stdoutLineBuf);
+        stdoutLineBuf = lines[i];
+      }
+    });
+
+    function processLine(line: string) {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      // 进度行实时转发到终端
+      if (trimmed.startsWith('[') || trimmed.startsWith('─') || trimmed.startsWith('Bulk store') || trimmed.startsWith('✅ Stored') || trimmed.startsWith('❌ Error') || trimmed.startsWith('Processed:') || trimmed.startsWith('⏭')) {
+        process.stderr.write(line + '\n');
+      }
+      // 解析状态行，只判断成功/失败
+      const m = trimmed.match(STATUS_PATTERN);
+      if (m) {
+        const idx = parseInt(m[1], 10) - 1; // 转为 0-based
+        const status = m[2];
+        if (status === '✅') {
+          perEntryResults.set(idx, { ok: true });
+        } else if (status === '❌') {
+          perEntryResults.set(idx, { ok: false, error: 'bulk-store failed' });
+        } else if (status === '⏭️') {
+          perEntryResults.set(idx, { ok: false, error: 'skipped' });
+        }
       }
     }
 
-    for (const item of result.details.errors) {
-      const entry = entries[item.index];
-      if (entry) {
-        errors.push({ path: entry.path, error: item.error });
-      }
-    }
+    let hasError = false;
 
-    // skipped 条目（text 为空等）也视为错误
-    for (const item of result.details.skipped || []) {
-      const entry = entries[item.index];
-      if (entry) {
-        errors.push({ path: entry.path, error: item.reason || 'skipped by bulk-store' });
+    child.on('error', (err) => {
+      hasError = true;
+      const errMsg = `mem bulk-store 启动失败: ${err.message}`;
+      for (const entry of entries) {
+        errors.push({ path: entry.path, error: errMsg });
       }
-    }
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stdout?: Buffer | string; stderr?: Buffer | string; status?: number };
-    const stderr = e.stderr ? e.stderr.toString() : '';
-    const statusInfo = typeof e.status === 'number' ? ` exitCode=${e.status}` : '';
-    const errMsg = `mem bulk-store 失败${statusInfo}: ${e.message || ''}${stderr ? `\nstderr=${stderr.trim().slice(0, 500)}` : ''}`.trim();
-    // 整体失败，所有条目标记为错误
-    for (const entry of entries) {
-      errors.push({ path: entry.path, error: errMsg });
-    }
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-  }
+      cleanup(tmpFile);
+      resolve({ ok, errors });
+    });
 
-  return { ok, errors };
+    child.on('close', (code) => {
+      // error 事件已处理，close 只需收尾
+      if (hasError) return;
+      // 输出最后一行
+      processLine(stdoutLineBuf);
+
+      if (code !== 0 && code !== null && perEntryResults.size === 0) {
+        // 进程异常退出且无任何结果
+        const errMsg = `mem bulk-store 失败 exitCode=${code}${stderrBuf ? ': ' + stderrBuf.trim().slice(0, 300) : ''}`;
+        for (const entry of entries) {
+          errors.push({ path: entry.path, error: errMsg });
+        }
+        cleanup(tmpFile);
+        resolve({ ok, errors });
+        return;
+      }
+
+      // 4) 从逐行解析结果构建 ok/errors
+      //    成功条目的 ID 用 path 短 hash 占位（搜索不依赖真实 memoryId，断点续跑只看 path）
+      for (let i = 0; i < entries.length; i++) {
+        const result = perEntryResults.get(i);
+        if (result?.ok) {
+          const fakeId = crypto.createHash('md5').update(entries[i].path).digest('hex').slice(0, 16);
+          ok.set(entries[i].path, fakeId);
+        } else if (result && !result.ok) {
+          errors.push({ path: entries[i].path, error: result.error || 'unknown error' });
+        }
+        // 未出现在进度中的条目视为未知错误
+        else if (!result) {
+          errors.push({ path: entries[i].path, error: 'bulk-store 未处理此条目' });
+        }
+      }
+
+      cleanup(tmpFile);
+      resolve({ ok, errors });
+    });
+  });
 }
 
-/** 从可能混入非 JSON 行的 stdout 中提取最后一个完整 JSON 对象 */
-function extractJsonObject(stdout: string): string {
-  const trimmed = stdout.trim();
-  // 快速路径：整个输出就是一个 JSON 对象
-  if (trimmed.startsWith('{')) {
-    return trimmed;
-  }
-  // 慢速路径：从末尾找最后一个 JSON 对象
-  const lastBrace = trimmed.lastIndexOf('\n{');
-  if (lastBrace >= 0) {
-    return trimmed.slice(lastBrace + 1);
-  }
-  // 兜底：直接尝试解析
-  return trimmed;
+/** 清理临时文件 */
+function cleanup(tmpFile: string) {
+  try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
 }

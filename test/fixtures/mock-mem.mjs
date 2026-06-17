@@ -14,6 +14,11 @@ import fs from 'node:fs';
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 
+if (cmd === '--version' || cmd === '-v') {
+  console.log('mem mock 1.0.0');
+  process.exit(0);
+}
+
 if (cmd === 'store') {
   const text = argv[1] || '';
   // 通过环境变量模拟失败
@@ -89,8 +94,26 @@ if (cmd === 'bulk-store') {
   if (isJson) {
     console.log(JSON.stringify(result));
   } else {
-    // human-readable
-    console.log(`Processed ${entries.length} entries: ${ok.length} ok, ${errors.length} errors, ${skipped.length} skipped`);
+    // 与真实 mem bulk-store 一致的人类可读格式
+    const total = entries.length;
+    for (const item of ok) {
+      const label = item.text.replace(/\n/g, ' ').slice(0, 40);
+      console.log(`[${item.index + 1}/${total}] ✅ ${label} → ${item.id}`);
+    }
+    for (const item of errors) {
+      const label = item.text.replace(/\n/g, ' ').slice(0, 40);
+      console.log(`[${item.index + 1}/${total}] ❌ ${label} → ${item.error}`);
+    }
+    for (const item of skipped) {
+      const label = item.text.replace(/\n/g, ' ').slice(0, 40);
+      console.log(`[${item.index + 1}/${total}] ⏭️ ${label} → ${item.reason}`);
+    }
+    console.log('');
+    console.log('──────────────────────────────────────────────────');
+    console.log(`Bulk store complete (0.01s)`);
+    console.log(`✅ Stored: ${ok.length}`);
+    console.log(`❌ Errors: ${errors.length}`);
+    console.log(`Processed: ${total} / ${total}`);
   }
   // bulk-store 默认 exit 0（JSON 结果中记录 per-entry 错误）
   process.exit(0);
@@ -107,6 +130,17 @@ if (cmd === 'delete') {
     process.exit(1);
   }
   console.log(`Memory ${id} forgotten.`);
+  process.exit(0);
+}
+
+if (cmd === 'scope' && argv[1] === 'list') {
+  // 返回 scope 列表（用于 ensureMemScope 校验）
+  // 通过环境变量 MOCK_SCOPES 指定已注册的 scope（逗号分隔）
+  const scopes = (process.env.MOCK_SCOPES || '').split(',').filter(Boolean);
+  console.log('  Scope   Memories');
+  for (const s of scopes) {
+    console.log(`  ${s}   0`);
+  }
   process.exit(0);
 }
 

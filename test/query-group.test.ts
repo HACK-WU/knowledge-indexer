@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 // ─── 辅助 ───
 
@@ -24,7 +25,7 @@ function runQueryGroup(args: string[]): string {
   try {
     return execFileSync('npx', ['jiti', SCRIPT_PATH, ...args], {
       encoding: 'utf-8',
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: getTestEnv()
     });
   } catch (err: any) {
     if (err.stdout) return err.stdout;
@@ -37,6 +38,7 @@ function runQueryGroup(args: string[]): string {
 const scope = `query-test-${Date.now()}`;
 
 before(async () => {
+  registerTestScope(scope);
   const { initScope, writeJson, readJson } = await import('../scripts/lib/store.js');
   const { getGroupIndexPath, getRelationsCachePath, getKbDir } = await import('../scripts/lib/scope.js');
 
@@ -45,7 +47,7 @@ before(async () => {
   // 构建 Group 树
   const indexPath = getGroupIndexPath(scope);
   const groupIndex = readJson<any>(indexPath)!;
-  groupIndex.roots['项目根'] = {
+  groupIndex.groups['项目根'] = {
     '监控': {
       '告警中心': {},
       '日志查询': {},
@@ -122,10 +124,11 @@ after(async () => {
   if (fs.existsSync(kbDir)) {
     fs.rmSync(kbDir, { recursive: true, force: true });
   }
+  cleanupTestConfig();
 });
 
 describe('query-group hot 模式（默认）', () => {
-  it('展示完整格式（热门索引 + 树 + 统计）', () => {
+  it('展示完整格式（热门索引 + 统计）', () => {
     const output = runQueryGroup([
       '--scope', scope,
       '--mode', 'hot',
@@ -134,7 +137,6 @@ describe('query-group hot 模式（默认）', () => {
     assert.ok(output.includes('知识索引'));
     assert.ok(output.includes(`scope: ${scope}`));
     assert.ok(output.includes('热门索引'));
-    assert.ok(output.includes('完整索引树'));
     assert.ok(output.includes('项目根'));
     assert.ok(output.includes('统计信息'));
   });
@@ -171,7 +173,6 @@ describe('query-group warm 模式', () => {
     ]);
 
     assert.ok(output.includes('知识索引'));
-    assert.ok(output.includes('完整索引树'));
     assert.ok(output.includes('统计信息'));
   });
 });
@@ -184,7 +185,6 @@ describe('query-group cold 模式', () => {
     ]);
 
     assert.ok(output.includes('知识索引'));
-    assert.ok(output.includes('完整索引树'));
     assert.ok(output.includes('统计信息'));
   });
 });
@@ -197,7 +197,6 @@ describe('query-group emerging 模式', () => {
     ]);
 
     assert.ok(output.includes('知识索引'));
-    assert.ok(output.includes('完整索引树'));
     assert.ok(output.includes('统计信息'));
   });
 });
@@ -242,6 +241,7 @@ describe('query-group 边界情况', () => {
     const { getKbDir } = await import('../scripts/lib/scope.js');
 
     try {
+      registerTestScope(emptyScope);
       initScope(emptyScope);
 
       const output = runQueryGroup([

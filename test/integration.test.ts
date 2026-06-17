@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 const SCRIPTS_DIR = path.resolve(import.meta.dirname, '..', 'scripts');
 
@@ -22,7 +23,7 @@ function runScript(script: string, args: string[]): { stdout: string; status: nu
   try {
     const stdout = execFileSync('npx', ['jiti', path.join(SCRIPTS_DIR, script), ...args], {
       encoding: 'utf-8',
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: getTestEnv()
     });
     return { stdout, status: 0 };
   } catch (err: any) {
@@ -59,7 +60,15 @@ let counter = 0;
 
 function makeScope(prefix: string): string {
   const scope = `${prefix}-${Date.now()}-${++counter}`;
+  registerTestScope(scope);
   createdScopes.push(scope);
+  return scope;
+}
+
+async function makeScopeInit(prefix: string): Promise<string> {
+  const scope = makeScope(prefix);
+  const { initScope } = await import('../scripts/lib/store.js');
+  initScope(scope);
   return scope;
 }
 
@@ -82,19 +91,20 @@ after(async () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }
+  cleanupTestConfig();
 });
 
 // ─── 快速路径: manage-index → sync-relation → query-group → get-module-info ───
 
 describe('快速路径', () => {
-  it('manage-index 创建 Group 树', () => {
-    const scope = makeScope('integration-fast');
+  it('manage-index 创建 Group 树', async () => {
+    const scope = await makeScopeInit('integration-fast');
 
-    // create-root
+    // create root
     const createRoot = runScriptJson('manage-index.ts', [
       '--scope', scope,
-      '--action', 'create-root',
-      '--root-name', 'wiki',
+      '--action', 'create',
+      '--name', 'wiki',
     ]);
     assert.strictEqual(createRoot.ok, true);
     assert.strictEqual(createRoot.path, 'wiki');
@@ -120,11 +130,11 @@ describe('快速路径', () => {
     assert.strictEqual(createDeeper.path, 'wiki/监控/告警中心');
   });
 
-  it('sync-relation 单条回写', () => {
-    const scope = makeScope('integration-fast');
+  it('sync-relation 单条回写', async () => {
+    const scope = await makeScopeInit('integration-fast');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     const result = runScriptJson('sync-relation.ts', [
@@ -139,13 +149,13 @@ describe('快速路径', () => {
     assert.strictEqual(result.keywords.length, 2);
   });
 
-  it('sync-relation 批量回写', () => {
-    const scope = makeScope('integration-fast');
+  it('sync-relation 批量回写', async () => {
+    const scope = await makeScopeInit('integration-fast');
     const inputDir = makeTempDir('ki-int-batch');
     const inputFile = path.join(inputDir, 'batch.json');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     fs.writeFileSync(inputFile, JSON.stringify({
@@ -165,13 +175,13 @@ describe('快速路径', () => {
     assert.strictEqual(result.results.length, 2);
   });
 
-  it('query-group 快速查询', () => {
-    const scope = makeScope('integration-fast');
+  it('query-group 快速查询', async () => {
+    const scope = await makeScopeInit('integration-fast');
     const inputDir = makeTempDir('ki-int-query');
     const inputFile = path.join(inputDir, 'batch.json');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     fs.writeFileSync(inputFile, JSON.stringify({
@@ -186,17 +196,17 @@ describe('快速路径', () => {
     const { stdout } = runScript('query-group.ts', [
       '--scope', scope,
       '--groups', 'wiki/监控',
-      '--mode', 'compact',
+      '--mode', 'hot',
     ]);
     assert.ok(stdout.includes('wiki/监控'));
     assert.ok(stdout.includes('查询规则'));
   });
 
-  it('get-module-info 读取模块信息', () => {
-    const scope = makeScope('integration-fast');
+  it('get-module-info 读取模块信息', async () => {
+    const scope = await makeScopeInit('integration-fast');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     runScriptJson('sync-relation.ts', [
@@ -221,26 +231,26 @@ describe('快速路径', () => {
 // ─── 检索回退路径 ───
 
 describe('检索回退路径', () => {
-  it('查询不存在的 Group 返回空', () => {
-    const scope = makeScope('integration-fallback');
+  it('查询不存在的 Group 返回空', async () => {
+    const scope = await makeScopeInit('integration-fallback');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     const { stdout } = runScript('query-group.ts', [
       '--scope', scope,
       '--groups', 'wiki/不存在',
-      '--mode', 'compact',
+      '--mode', 'hot',
     ]);
     assert.ok(stdout.includes('暂无 Relations'));
   });
 
-  it('get-module-info 查询不存在的 Relation 返回错误', () => {
-    const scope = makeScope('integration-fallback');
+  it('get-module-info 查询不存在的 Relation 返回错误', async () => {
+    const scope = await makeScopeInit('integration-fallback');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     runScriptJson('sync-relation.ts', [
@@ -265,10 +275,10 @@ describe('检索回退路径', () => {
 
 describe('知识缺失路径', () => {
   it('本地 KB 不存在时 get-module-info 报错', async () => {
-    const scope = makeScope('integration-missing');
+    const scope = await makeScopeInit('integration-missing');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     runScriptJson('sync-relation.ts', [
@@ -294,10 +304,10 @@ describe('知识缺失路径', () => {
   });
 
   it('relations-cache 不存在时 get-module-info 报错', async () => {
-    const scope = makeScope('integration-missing');
+    const scope = await makeScopeInit('integration-missing');
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     // 删除 relations-cache
@@ -319,7 +329,7 @@ describe('知识缺失路径', () => {
 
 describe('导入路径', () => {
   it('scan-kb → import-kb 完整导入链路', async () => {
-    const scope = makeScope('integration-import');
+    const scope = await makeScopeInit('integration-import');
     const sourceDir = makeTempDir('ki-int-source');
 
     fs.mkdirSync(path.join(sourceDir, '监控'), { recursive: true });
@@ -361,7 +371,7 @@ describe('导入路径', () => {
 
     // import-kb convention mode
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'wiki',
+      '--scope', scope, '--action', 'create', '--name', 'wiki',
     ]);
 
     const { getScanIndexPath } = await import('../scripts/lib/scope.js');
@@ -378,8 +388,8 @@ describe('导入路径', () => {
     // resultsFile (scan-results.json) 也在 sourceDir 中，walkFiles 计入后被跳过
   });
 
-  it('import-kb 映射模式导入', () => {
-    const scope = makeScope('integration-mapping');
+  it('import-kb 映射模式导入', async () => {
+    const scope = await makeScopeInit('integration-mapping');
     const sourceDir = makeTempDir('ki-int-mapping');
     const mappingFile = path.join(sourceDir, 'mapping.json');
 
@@ -397,7 +407,7 @@ describe('导入路径', () => {
     }, null, 2));
 
     runScriptJson('manage-index.ts', [
-      '--scope', scope, '--action', 'create-root', '--root-name', 'external_wiki',
+      '--scope', scope, '--action', 'create', '--name', 'external_wiki',
     ]);
 
     const result = runScriptJson('import-kb.ts', [
@@ -415,7 +425,7 @@ describe('导入路径', () => {
 
 describe('A/M/D 全链路', () => {
   it('add → modify → delete 完整增量扫描链路', async () => {
-    const scope = makeScope('integration-amd');
+    const scope = await makeScopeInit('integration-amd');
     const repoDir = makeTempDir('ki-int-amd');
     const resultsFile = path.join(repoDir, 'scan-results.json');
 

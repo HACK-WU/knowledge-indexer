@@ -169,11 +169,14 @@ function buildDefaults(): KiConfig {
 
 /**
  * 获取指定 scope 的数据目录
- * 优先使用 scope 级 kbDir，fallback 到全局 dataDir/{scope}
+ * 优先使用 scope 级 kbDir（自动拼接 kb/{scope} 子目录，避免污染源码目录），
+ * fallback 到全局 dataDir/{scope}
+ *
+ * 示例：kbDir="/Users/xxx/bk-monitor-wiki" → "/Users/xxx/bk-monitor-wiki/kb/monitor"
  */
 export function getScopeDataDir(config: KiConfig, scope: string): string {
   const sc = config.scopes[scope];
-  if (sc?.kbDir) return sc.kbDir;
+  if (sc?.kbDir) return path.join(sc.kbDir, 'kb', scope);
   return path.join(config.dataDir, scope);
 }
 

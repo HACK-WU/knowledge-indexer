@@ -83,7 +83,8 @@ function buildEnhancedPath(): string {
     if (npmGlobalBin) extra.push(npmGlobalBin);
   } catch { /* ignore */ }
 
-  return [...new Set([...extra, ...currentPath.split(path.delimiter)])].join(path.delimiter);
+  // 当前 PATH 优先（用户显式设置的优先级最高），extra 作为补充
+  return [...new Set([...currentPath.split(path.delimiter), ...extra])].join(path.delimiter);
 }
 
 let _enhancedEnv: Record<string, string | undefined> | null = null;
@@ -315,6 +316,138 @@ export function ensureMemAvailable(): MemAvailableResult {
     _memAvailable = checkMemAvailable();
   }
   return _memAvailable;
+}
+
+// ─── mem scope 校验 ───
+
+let _cachedMemScopes: string[] | null = null;
+
+/**
+ * 读取 mem 配置文件中已定义的 scope 列表。
+ * mem 配置文件路径：~/.config/memory-mcp/config.yaml
+ * 格式：scopes.definitions.<scope_name>
+ */
+function readMemConfigScopes(): string[] {
+  const configPath = path.join(os.homedir(), '.config', 'memory-mcp', 'config.yaml');
+  if (!fs.existsSync(configPath)) return [];
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    // 简单 YAML 解析：提取 scopes.definitions 下的直接子项（scope 名）
+    const scopes: string[] = [];
+    let inDefinitions = false;
+    let definitionsIndent = -1;
+    let scopeIndent = -1; // definitions 直接子项的缩进
+
+    for (const line of content.split('\n')) {
+      // 检测 "  definitions:" 进入
+      if (/^\s+definitions:/.test(line) && !inDefinitions) {
+        inDefinitions = true;
+        definitionsIndent = line.search(/\S/);
+        continue;
+      }
+
+      if (inDefinitions) {
+        const lineIndent = line.search(/\S/);
+        if (lineIndent === -1) continue; // 空行
+
+        // 缩进回退到 definitions 层级或更浅 → 退出
+        if (lineIndent <= definitionsIndent && line.trim() && !line.trim().startsWith('#')) {
+          inDefinitions = false;
+          continue;
+        }
+
+        // 只接受 definitions 的直接子项（definitionsIndent + 2 缩进）
+        if (lineIndent > definitionsIndent) {
+          if (scopeIndent === -1) {
+            // 第一个子项确定 scope 的缩进层级
+            scopeIndent = lineIndent;
+          }
+
+          // 只匹配与 scope 同层级的 key（排除 description、acl 等子属性）
+          if (lineIndent === scopeIndent) {
+            const m = line.match(/^\s+(\w[\w-]*):/);
+            if (m) scopes.push(m[1]);
+          }
+        }
+      }
+    }
+
+    return scopes;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 获取 mem 中已注册的 scope 列表（进程内缓存）。
+ * 合并两种来源：
+ *   1. mem scope list 命令输出（有数据的 scope）
+ *   2. mem 配置文件中定义的 scope（可能尚无数据）
+ */
+export function getMemScopes(): string[] {
+  if (_cachedMemScopes !== null) return _cachedMemScopes;
+
+  const scopeSet = new Set<string>();
+
+  // 来源1：mem scope list（有数据的 scope）
+  const avail = checkMemAvailable();
+  if (avail.available) {
+    try {
+      const stdout = execFileSync('mem', ['scope', 'list'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5000,
+        env: getEnhancedEnv(),
+      });
+
+      const lines = stdout.split('\n');
+      for (const line of lines) {
+        const match = line.match(/^\s{2}(\S+)\s+\d+/);
+        if (match && match[1] !== 'Scope') {
+          scopeSet.add(match[1]);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 来源2：mem 配置文件中定义的 scope（可能尚无数据）
+  for (const s of readMemConfigScopes()) {
+    scopeSet.add(s);
+  }
+
+  _cachedMemScopes = [...scopeSet];
+  return _cachedMemScopes;
+}
+
+/**
+ * 检查 scope 是否在 mem 中已注册
+ */
+export function checkMemScope(scope: string): { exists: boolean; availableScopes: string[] } {
+  const scopes = getMemScopes();
+  return { exists: scopes.includes(scope), availableScopes: scopes };
+}
+
+/**
+ * 检查 scope 在 mem 中是否已注册。
+ * 未注册时仅输出警告（mem scope 在首次 store 时隐式创建，不能阻塞首次导入）。
+ * 当 mem CLI 不可用或尚未注册任何 scope 时静默跳过（兼容无 mem 环境）。
+ */
+export function ensureMemScope(scope: string): void {
+  const check = checkMemScope(scope);
+  if (!check.exists && check.availableScopes.length > 0) {
+    process.stderr.write(
+      `⚠ scope "${scope}" 尚未在 mem 中注册。` +
+      `mem 已注册的 scope：${check.availableScopes.join(', ')}\n` +
+      `  首次导入时会自动创建，如已存在可忽略此警告\n`
+    );
+  }
+}
+
+/** 测试用：清除 mem scope 缓存和环境缓存 */
+export function resetMemScopesCache(): void {
+  _cachedMemScopes = null;
+  _enhancedEnv = null;
 }
 
 // ─── 内部辅助 ───

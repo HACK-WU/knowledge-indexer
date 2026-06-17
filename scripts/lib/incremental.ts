@@ -30,6 +30,7 @@ import {
   deleteMemory,
   type BatchVectorizeOptions,
 } from './batch-vectorize.js';
+import { ensureMemScope } from './mem-client.js';
 import {
   buildRelationContent,
   buildGroupPathContent,
@@ -222,9 +223,12 @@ export interface HandleIncrementalArgs extends HandleImportArgs {
   // memBinPath 已移除，直接使用全局 mem 命令
 }
 
-export function handleIncremental(args: HandleIncrementalArgs): IncrementalResult {
+export async function handleIncremental(args: HandleIncrementalArgs): Promise<IncrementalResult> {
   const TOTAL_PHASES = 4;
   ensureScopeDir(args.scope);
+
+  // 校验 mem 中是否已注册该 scope
+  ensureMemScope(args.scope);
 
   // Phase 1: 校验 source 块 + 解析 ai-results
   logPhaseStart(1, TOTAL_PHASES, '校验增量导入前置条件 ...');
@@ -324,7 +328,7 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
     });
 
     // 3c) 批量向量化
-    const vec = bulkVectorize(toVectorize, args.scope, {
+    const vec = await bulkVectorize(toVectorize, args.scope, {
       timeoutMs: 60_000 + vectorizeTotal * 10_000,
     });
 
@@ -332,6 +336,7 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
     for (let i = 0; i < toVectorize.length; i++) {
       const e = toVectorize[i];
       const origin = origins[i];
+      logProgress(i + 1, toVectorize.length, `[${origin}] ${e.path}`);
       const memoryId = vec.ok.get(e.path);
 
       if (!memoryId) {

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 // ─── 辅助 ───
 
@@ -24,7 +25,7 @@ function runGetModuleInfo(args: string[]): string {
   try {
     return execFileSync('npx', ['jiti', SCRIPT_PATH, ...args], {
       encoding: 'utf-8',
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: getTestEnv()
     });
   } catch (err: any) {
     if (err.stdout) return err.stdout;
@@ -49,6 +50,7 @@ const testMarkdown = '# 告警规则CRUD\n\n## 调用链\n1. AlertController.cre
 
 before(async () => {
   // 初始化 scope 并写入测试数据
+  registerTestScope(scope);
   const { initScope, writeJson, readJson } = await import('../scripts/lib/store.js');
   const { getRelationsCachePath, getLocalKbDir } = await import('../scripts/lib/scope.js');
 
@@ -87,6 +89,7 @@ after(async () => {
   if (fs.existsSync(kbDir)) {
     fs.rmSync(kbDir, { recursive: true, force: true });
   }
+  cleanupTestConfig();
 });
 
 describe('get-module-info 基本功能', () => {

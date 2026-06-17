@@ -8,9 +8,11 @@ import os from 'node:os';
 import { getSource, setSource } from '../scripts/lib/scope.ts';
 import { ensureScopeDir } from '../scripts/lib/store.ts';
 import { getGroupIndexPath, getKbDir } from '../scripts/lib/scope.ts';
+import { registerTestScope, cleanupTestConfig } from './test-config.ts';
 
 // 使用临时 scope 名避免污染真实 mcp-test
 const TEST_SCOPE = 's01-test-' + Date.now();
+registerTestScope(TEST_SCOPE);
 
 function cleanup() {
   const dir = getKbDir(TEST_SCOPE);
@@ -65,10 +67,10 @@ test('S-01: setSource 字段不全应抛错', () => {
   cleanup();
 });
 
-test('S-01: roots 不应被 setSource 破坏', () => {
+test('S-01: 旧格式 roots 应在 setSource 时迁移为 groups', () => {
   cleanup();
   ensureScopeDir(TEST_SCOPE);
-  // 写入一个有 roots 的 group-index
+  // 写入一个有 roots 的旧格式 group-index
   const filePath = getGroupIndexPath(TEST_SCOPE);
   const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
   data.roots = { wiki: { 部署运维: {} } };
@@ -76,7 +78,8 @@ test('S-01: roots 不应被 setSource 破坏', () => {
 
   setSource(TEST_SCOPE, { dir: '/tmp/abc', rootName: 'wiki', commit: 'c1' });
   const after = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  assert.deepEqual(after.roots, { wiki: { 部署运维: {} } }, 'roots 必须保留');
+  // setSource 会触发 migrateGroupIndex，roots 迁移为 groups
+  assert.deepEqual(after.groups, { wiki: { 部署运维: {} } }, 'roots 应迁移为 groups');
   assert.equal(after.source.commit, 'c1');
   cleanup();
 });

@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 // ─── 辅助函数 ───
 
@@ -24,7 +25,7 @@ function runManageIndex(args: string[]): { ok: boolean; [key: string]: unknown }
   try {
     const output = execFileSync('npx', ['jiti', SCRIPT_PATH, ...args], {
       encoding: 'utf-8',
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: getTestEnv()
     });
     return JSON.parse(output);
   } catch (err: any) {
@@ -53,6 +54,7 @@ before(() => {
 
 after(() => {
   fs.rmSync(tmpKbDir, { recursive: true, force: true });
+  cleanupTestConfig();
 });
 
 describe('manage-index 核心逻辑', () => {

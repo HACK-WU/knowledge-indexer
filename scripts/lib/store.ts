@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { walWrite } from './wal.js';
 import { getKbDir, getGroupIndexPath, getRelationsCachePath, validateScope, migrateGroupIndex } from './scope.js';
+import { loadConfig } from './config.js';
 import { CURRENT_DATA_VERSION, TEMPLATE_DIR } from './constants.js';
 
 // ─── JSON 读写 ───
@@ -165,14 +166,65 @@ function migrateRelationsCacheKeys(scope: string): void {
 
 /**
  * 确保 kb/{scope}/ 目录存在，不存在则从 _template 初始化
+ *
+ * 校验规则：如果 ki 配置文件存在但 scope 未在 scopes 中注册，
+ * 且数据目录不存在，拒绝自动创建空目录并给出修复建议。
  */
 export function ensureScopeDir(scope: string): void {
   validateScope(scope);
   const kbDir = getKbDir(scope);
 
-  if (fs.existsSync(kbDir)) return;
+  // Scope 配置校验：配置文件存在但 scope 未注册时，拒绝并给出修复建议
+  const config = loadConfig();
+  if (config._configPath && !(scope in config.scopes)) {
+    const available = Object.keys(config.scopes);
+    const lines: string[] = [
+      `scope "${scope}" 未在 ki 配置中注册。`,
+    ];
+    if (available.length > 0) {
+      lines.push(`已注册的 scope：${available.join(', ')}`);
+    } else {
+      lines.push(`配置文件中尚未注册任何 scope。`);
+    }
+    lines.push(
+      ``,
+      `修复方式：`,
+      `  1. 在 ${config._configPath} 的 scopes 中添加 "${scope}"`,
+      `  2. 或使用已注册的 scope 名称执行命令`,
+    );
+    throw new Error(lines.join('\n'));
+  }
 
-  initScope(scope);
+  // 目录不存在 → 全新 scope，从模板初始化
+  if (!fs.existsSync(kbDir)) {
+    initScope(scope);
+    return;
+  }
+
+  // 目录存在但两个关键文件都缺失 → 视为未初始化，从模板初始化
+  const groupIndexPath = path.join(kbDir, 'group-index.json');
+  const relationsCachePath = path.join(kbDir, 'relations-cache.json');
+  if (!fs.existsSync(groupIndexPath) && !fs.existsSync(relationsCachePath)) {
+    initScope(scope);
+    return;
+  }
+
+  // 目录存在且至少一个关键文件存在 → 认为 scope 已初始化
+  // （如果只有其中一个文件缺失，视为损坏，由调用方处理）
+
+  // 旧数据迁移提示：检查 kbDir 根目录下是否有旧数据（kbDir 语义变更前遗留）
+  // 只要有旧数据就警告，不依赖新数据是否存在
+  if (config.scopes[scope]?.kbDir) {
+    const rawKbDir = config.scopes[scope].kbDir!;
+    const oldGroupIndex = path.join(rawKbDir, 'group-index.json');
+    if (fs.existsSync(oldGroupIndex)) {
+      process.stderr.write(
+        `⚠ 检测到旧数据：${oldGroupIndex}\n` +
+        `  kbDir 语义已变更，数据应位于 ${path.join(rawKbDir, 'kb', scope)}/\n` +
+        `  建议：将旧数据迁移到新路径，或删除旧文件后重新导入\n`
+      );
+    }
+  }
 }
 
 /**

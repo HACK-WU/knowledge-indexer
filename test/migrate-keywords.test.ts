@@ -8,6 +8,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
+import { registerTestScope, getTestEnv, testConfigPath } from './test-config.ts';
 
 let testScope: string;
 
@@ -16,6 +17,7 @@ before(async () => {
   const { getRelationsCachePath, getKbDir } = await import('../scripts/lib/scope.js');
 
   testScope = `migrate-kw-${Date.now()}`;
+  registerTestScope(testScope);
   initScope(testScope);
 
   // 写入旧格式 relations-cache.json
@@ -89,7 +91,7 @@ describe('migrate-keywords 幂等性', () => {
     // 第一次迁移
     const r1 = execSync(
       `npx tsx scripts/migrate-keywords.ts --scope ${scope}`,
-      { encoding: 'utf-8', cwd: path.resolve(import.meta.dirname, '..', '..') }
+      { encoding: 'utf-8', cwd: path.resolve(import.meta.dirname, '..'), env: getTestEnv() }
     );
     const result1 = JSON.parse(r1);
     assert.strictEqual(result1.ok, true);
@@ -99,7 +101,7 @@ describe('migrate-keywords 幂等性', () => {
     // 第二次迁移（幂等）
     const r2 = execSync(
       `npx tsx scripts/migrate-keywords.ts --scope ${scope}`,
-      { encoding: 'utf-8', cwd: path.resolve(import.meta.dirname, '..', '..') }
+      { encoding: 'utf-8', cwd: path.resolve(import.meta.dirname, '..'), env: getTestEnv() }
     );
     const result2 = JSON.parse(r2);
     assert.strictEqual(result2.ok, true);
@@ -143,6 +145,7 @@ describe('migrate-keywords 幂等性', () => {
     const { getRelationsCachePath, getKbDir } = await import('../scripts/lib/scope.js');
 
     const dryScope = `migrate-dry-${Date.now()}`;
+    registerTestScope(dryScope);
     initScope(dryScope);
 
     try {
@@ -163,7 +166,7 @@ describe('migrate-keywords 幂等性', () => {
       // dry-run
       const r1 = execSync(
         `npx tsx scripts/migrate-keywords.ts --scope ${dryScope} --dry-run`,
-        { encoding: 'utf-8', cwd: path.resolve(import.meta.dirname, '..', '..') }
+        { encoding: 'utf-8', cwd: path.resolve(import.meta.dirname, '..'), env: getTestEnv() }
       );
       const result1 = JSON.parse(r1);
       assert.strictEqual(result1.ok, true);

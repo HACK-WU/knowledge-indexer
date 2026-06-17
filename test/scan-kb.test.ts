@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 const SCRIPT_PATH = path.resolve(import.meta.dirname, '..', 'scripts', 'scan-kb.ts');
 
@@ -18,7 +19,7 @@ function runScan(args: string[]): any {
   try {
     const output = execFileSync('npx', ['jiti', SCRIPT_PATH, ...args], {
       encoding: 'utf-8',
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: getTestEnv(),
     });
     return JSON.parse(output);
   } catch (err: any) {
@@ -53,6 +54,7 @@ let counter = 0;
 
 function makeScope(prefix: string): string {
   const scope = `${prefix}-${Date.now()}-${++counter}`;
+  registerTestScope(scope);
   createdScopes.push(scope);
   return scope;
 }
@@ -77,6 +79,7 @@ after(async () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }
+  cleanupTestConfig();
 });
 
 describe('scan-kb scan 子命令', () => {

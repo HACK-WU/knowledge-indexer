@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { registerTestScope, getTestEnv, cleanupTestConfig } from './test-config.js';
 
 // ─── 辅助 ───
 
@@ -24,7 +25,7 @@ function runSync(args: string[]): any {
   try {
     const output = execFileSync('npx', ['jiti', SCRIPT_PATH, ...args], {
       encoding: 'utf-8',
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: getTestEnv()
     });
     return JSON.parse(output);
   } catch (err: any) {
@@ -40,7 +41,8 @@ function runSync(args: string[]): any {
 const scope = `sync-test-${Date.now()}`;
 
 before(async () => {
-  // 初始化 scope
+  // 注册 scope 到测试配置，然后初始化 scope 目录
+  registerTestScope(scope);
   const { initScope } = await import('../scripts/lib/store.js');
   initScope(scope);
 });
@@ -51,6 +53,7 @@ after(async () => {
   if (fs.existsSync(kbDir)) {
     fs.rmSync(kbDir, { recursive: true, force: true });
   }
+  cleanupTestConfig();
 });
 
 describe('sync-relation 单条模式', () => {
@@ -178,6 +181,7 @@ describe('sync-relation 淘汰逻辑', () => {
     const { getRelationsCachePath, getKbDir } = await import('../scripts/lib/scope.js');
 
     try {
+      registerTestScope(evictionScope);
       initScope(evictionScope);
 
       // 设置 maxHotCount = 2
@@ -245,6 +249,7 @@ describe('sync-relation 批量模式', () => {
     const { getRelationsCachePath, getKbDir } = await import('../scripts/lib/scope.js');
 
     try {
+      registerTestScope(batchScope);
       initScope(batchScope);
 
       // 创建批量输入文件
@@ -300,6 +305,7 @@ describe('sync-relation 批量模式', () => {
     const { getRelationsCachePath, getKbDir } = await import('../scripts/lib/scope.js');
 
     try {
+      registerTestScope(batchScope);
       initScope(batchScope);
 
       const inputFile = path.join(
