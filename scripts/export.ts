@@ -51,11 +51,7 @@ interface RelationEntry {
 }
 
 interface LocalKbIndex {
-  [relation: string]: {
-    moduleInfo?: string;
-    content?: string;
-    [key: string]: unknown;
-  };
+  [relation: string]: string | { moduleInfo?: string; content?: string; [key: string]: unknown };
 }
 
 // ─── 工具 ───
@@ -101,7 +97,7 @@ function collectGroupPaths(
 interface RelationsCache {
   version: number;
   scope: string;
-  relations: Record<string, RelationEntry[]>;
+  groups: Record<string, { hot_relations: RelationEntry[] }>;
 }
 
 function readRelationsCache(scope: string): RelationsCache {
@@ -118,7 +114,7 @@ function readRelationsCache(scope: string): RelationsCache {
   return {
     version: data.version || 1,
     scope: data.scope || scope,
-    relations: data.relations || {},
+    groups: data.groups || {},
   };
 }
 
@@ -196,7 +192,7 @@ function handleExport(options: ExportOptions): ExportResult {
 
   // 遍历每个 Group
   for (const groupPath of groupPaths) {
-    const relations = relationsCache.relations[groupPath] || [];
+    const relations = relationsCache.groups[groupPath]?.hot_relations || [];
     if (relations.length === 0) continue;
 
     // 读取该 Group 的 local KB
@@ -206,9 +202,15 @@ function handleExport(options: ExportOptions): ExportResult {
     for (const rel of relations) {
       stats.total++;
 
-      const relationName = rel.relation;
+      const relationName = rel.text || rel.relation;
       const keywords = rel.keywords || [];
-      const content = localKb?.[relationName]?.moduleInfo || localKb?.[relationName]?.content || null;
+      const rawContent = localKb?.[relationName];
+      let content: string | null = null;
+      if (typeof rawContent === 'string') {
+        content = rawContent;
+      } else if (rawContent && typeof rawContent === 'object') {
+        content = rawContent.moduleInfo || rawContent.content || null;
+      }
 
       if (!content) {
         stats.empty++;
