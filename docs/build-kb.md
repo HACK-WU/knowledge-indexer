@@ -57,6 +57,28 @@ scopes:
         - your-scope
 ```
 
+### 5. 确定 KB 存储位置
+
+不同 scope 的 KB 数据可以独立配置存储目录。在确定 scope 后，需要询问用户选择存储位置：
+
+- **默认位置**：使用 `dataDir` 配置的全局默认目录（`~/.ki/data`）
+- **自定义位置**：为该 scope 单独指定存储路径
+
+自定义方式如下，在 scope 配置中添加 `dataDir` 字段：
+
+```yaml
+scopes:
+  definitions:
+    your-scope:
+      description: your scope description
+      acl:
+        - global
+        - your-scope
+      dataDir: /path/to/custom/data
+```
+
+> **注意**：如果 scope 已有数据，修改 `dataDir` 后需要手动迁移或重新导入。
+
 ## 执行流程
 
 ### S-04 统一导入流程（2 步）
