@@ -395,7 +395,7 @@ export interface SyncRelationParams {
 }
 
 export type SyncRelationResult =
-  | { ok: true; relation: string; keywords: string[]; invalid_keywords: string[]; evicted: string | null; hint?: string; vectorStored?: boolean; wikiSynced?: boolean; wikiFile?: string; wikiReason?: string }
+  | { ok: true; relation: string; keywords: string[]; invalid_keywords: string[]; evicted: string | null; hint?: string; vectorPending?: boolean; wikiSynced?: boolean; wikiFile?: string; wikiReason?: string }
   | { ok: false; error: string };
 
 export function executeSyncRelation(params: SyncRelationParams): SyncRelationResult {
@@ -442,29 +442,30 @@ export function executeSyncRelation(params: SyncRelationParams): SyncRelationRes
     // WAL 持久化
     writeJson(cachePath, cache);
 
-    // 写入 ki-relation 向量索引（失败不阻塞）
-    try {
-      const relText = buildRelationContent(relation, group, keywordList);
-      storeOnePath({ text: relText, tag: 'ki-relation', scope });
-    } catch { /* 向量写入失败不影响主流程 */ }
-
-    // 容错双写：通用语义向量存储（同步 try-catch，失败不影响返回值）
-    let vectorStored: boolean | undefined;
-    try {
-      const avail = ensureMemAvailable();
-      if (avail.available) {
-        memStore({
-          scope,
-          text: moduleInfo,
-          keywords: keywordList,
-          tags: 'ki-search',
-        });
-        vectorStored = true;
+    // 向量写入异步执行（fire-and-forget，不阻塞 MCP 返回）
+    // MCP server 是长驻进程，异步任务会自然完成
+    // CLI 模式下向量可能丢失，这是设计允许的降级行为
+    Promise.resolve().then(async () => {
+      try {
+        const relText = buildRelationContent(relation, group, keywordList);
+        storeOnePath({ text: relText, tag: 'ki-relation', scope });
+      } catch {
+        // 向量写入失败不影响主流程
       }
-    } catch (err) {
-      console.warn(`[sync-relation] 向量双写失败: ${(err as Error).message}`);
-      vectorStored = false;
-    }
+      try {
+        const avail = ensureMemAvailable();
+        if (avail.available) {
+          memStore({
+            scope,
+            text: moduleInfo,
+            keywords: keywordList,
+            tags: 'ki-search',
+          });
+        }
+      } catch (err) {
+        console.warn(`[sync-relation] 向量异步写入失败: ${(err as Error).message}`);
+      }
+    });
 
     // Wiki 写回（容错，失败不阻塞）
     let wikiSynced: boolean | undefined;
@@ -486,7 +487,7 @@ export function executeSyncRelation(params: SyncRelationParams): SyncRelationRes
       ok: true,
       ...result,
       ...(pathHint ? { hint: pathHint } : {}),
-      ...(vectorStored !== undefined ? { vectorStored } : {}),
+      vectorPending: true,
       ...(wikiSynced !== undefined ? { wikiSynced } : {}),
       ...(wikiFile ? { wikiFile } : {}),
       ...(wikiReason ? { wikiReason } : {}),

@@ -1,5 +1,5 @@
 ---
-description: 指导 AI 管理知识索引和记忆。平台内置记忆用于简洁通用偏好，ki 记忆用于详细项目知识。强制加载 ki-foundation，按需选择 codekb-skill / memory-skill。
+description: 指导 AI 管理知识索引和记忆。平台内置记忆用于简洁通用偏好，ki 记忆用于详细项目知识。按需加载 ki-foundation，按需选择 codekb-skill / memory-skill。
 alwaysApply: true
 enabled: true
 updatedAt: 2026-06-13T17:10:00.000Z
@@ -41,7 +41,7 @@ ki 记忆内部：代码知识 → `codekb-skill`（`${scope}`）；项目上下
 
 | 步骤 | Skill | 触发条件 |
 |------|-------|----------|
-| ① | `ki-foundation` | **无条件加载**，对话开始即执行。不存在则提示安装并停止 |
+| ① | `ki-foundation` | 当需要使用ki记忆工具但不确定用法时加载。不存在则提示安装并停止 |
 | ②a | `codekb-skill` | 涉及代码/架构/API **详细**知识时 |
 | ②b | `memory-skill` | 涉及项目背景/进度/偏好/用户记忆时 |
 

@@ -1,3 +1,9 @@
+---
+groupPath: 部署指南
+relation: Docker 部署
+keywords: [Docker, 部署, 容器化]
+exportedAt: "2026-06-18T06:41:53.336Z"
+---
 # Docker 部署指南
 
 使用 Docker Compose 一键部署整套服务。
@@ -11,14 +17,9 @@
 ## 快速启动
 
 ```bash
-# 克隆仓库
 git clone https://example.com/app.git
 cd app
-
-# 复制环境变量
 cp .env.example .env
-
-# 启动服务
 docker compose up -d
 ```
 
@@ -30,11 +31,3 @@ docker compose up -d
 | web   | 3000 | 前端应用 |
 | redis | 6379 | 缓存层 |
 | pg    | 5432 | PostgreSQL |
-
-## 健康检查
-
-```bash
-curl http://localhost:8080/health
-```
-
-返回 `{"status":"ok"}` 表示服务正常。

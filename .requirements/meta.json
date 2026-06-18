@@ -1,0 +1,52 @@
+{
+  "requirements": {
+    "2026-06-18-向量存储与KB写入并行化优化": {
+      "id": "REQ-20260618-001",
+      "feature": "向量存储与KB写入并行化优化",
+      "created": "2026-06-18",
+      "updated": "2026-06-18",
+      "status": "已完成",
+      "tags": [
+        "refactor",
+        "performance"
+      ],
+      "version": 8,
+      "depends_on": [],
+      "changelog": [
+        "初始创建",
+        "2026-06-18 v3: 完成技术设计（单文档，3 个子需求）",
+        "2026-06-18 v4: 完成设计评审，修复 2 个警告项",
+        "2026-06-18 v5: 完成质疑审查，0 高风险",
+        "2026-06-18 v6: 设计评审通过，进入实施",
+        "2026-06-18 v7: 实现完成，全部测试通过",
+        "2026-06-18 v8: 生成实现报告"
+      ],
+      "commits": [],
+      "docs": [
+        {
+          "path": "requirement.md",
+          "type": "requirement"
+        },
+        {
+          "path": "design/DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/design-review.md",
+          "type": "review"
+        },
+        {
+          "path": "design/challenge-report.md",
+          "type": "review"
+        },
+        {
+          "path": "implementation-report.md",
+          "type": "report"
+        }
+      ],
+      "role": "standalone",
+      "parent_id": null,
+      "child_ids": []
+    }
+  }
+}

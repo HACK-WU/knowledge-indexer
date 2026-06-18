@@ -222,7 +222,8 @@ function upsertRelation(
     // 已存在：刷新为导入态，不做评分回退（与 import-kb 行为一致）
     rel.isImported = true;
   }
-  if (memoryId) rel.memoryId = memoryId;
+  // memoryId 已确认为死数据，不再写入 relation
+  // 旧数据中的 memoryId 保留不删除（兼容性）
   if (sourcePath) rel.sourcePath = sourcePath;
 
   // keywords 合并去重到 Group 级
@@ -492,18 +493,9 @@ export async function handleImport(args: HandleImportArgs): Promise<ImportResult
   logPhaseDone(1, TOTAL_PHASES, `校验通过，共 ${total} 条条目，rootName="${results.meta.rootName}"`);
 
   // Phase 2: 批量向量化（含断点续跑）
-  const { vec, skippedFromProgress } = await phase2Vectorize(
-    results.entries,
-    args.scope,
-    results.meta.rootName,
-    TOTAL_PHASES
-  );
+  // Phase 2 与 Phase 3/4 并行执行，消除串行阻塞
 
-  // 合并 memoryMap：进度文件恢复的 + 本次新向量化的
-  const mergedMap = new Map([...skippedFromProgress, ...vec.ok]);
-  const skipCount = skippedFromProgress.size;
-
-  // ── 路径向量写入（ki-path + ki-relation）──
+  // ── 预构建路径向量条目（仅依赖 Phase 1 结果，可提前计算）──
   const pathEntries: PathVectorizeEntry[] = [];
   const groupKeywordsMap = new Map<string, Set<string>>();
 
@@ -536,23 +528,7 @@ export async function handleImport(args: HandleImportArgs): Promise<ImportResult
     });
   }
 
-  if (pathEntries.length > 0) {
-    logInfo(`写入路径向量索引（${pathEntries.length} 条）...`);
-    const pathResult = bulkStorePaths(pathEntries);
-    logInfo(`路径向量写入完成：成功 ${pathResult.ok.size}，失败 ${pathResult.errors.length}`);
-  }
-
-  const ctx: ImportContext = {
-    scope: args.scope,
-    sourceDir: results.meta.sourceDir,
-    rootName: results.meta.rootName,
-    entries: results.entries,
-    memoryMap: mergedMap,
-    groups: new Set<string>([results.meta.rootName]),  // rootName 始终存在
-    mapping,
-  };
-
-  // 读取 group-index + relations-cache
+  // ── 预读取 group-index + relations-cache（两分支共享）──
   const groupIndexPath = getGroupIndexPath(args.scope);
   const relationsCachePath = getRelationsCachePath(args.scope);
   const groupIndex = readGroupIndex(args.scope);
@@ -561,24 +537,65 @@ export async function handleImport(args: HandleImportArgs): Promise<ImportResult
     throw new Error('scope 初始化失败：缺少 group-index.json 或 relations-cache.json');
   }
 
-  // Phase 3: 构建 Group 树
-  logPhaseStart(3, TOTAL_PHASES, '构建 Group 树 ...');
-  phase3EnsureGroups(ctx, groupIndex);
-  logPhaseDone(3, TOTAL_PHASES, `Group 树构建完成，涉及 ${ctx.groups.size} 个 Group`);
+  // ── Phase 2 与 Phase 3/4 并行执行 ──
+  const [vectorizeResult, kbResult] = await Promise.all([
+    // 分支 A: 向量化 + 路径向量写入
+    (async () => {
+      const { vec, skippedFromProgress } = await phase2Vectorize(
+        results.entries,
+        args.scope,
+        results.meta.rootName,
+        TOTAL_PHASES
+      );
 
-  // Phase 4 — 只处理向量化成功（或本身不需向量化）的条目
-  const successfulEntries = ctx.entries.filter((e) => {
-    if (e.action === 'delete') return false;
-    return ctx.memoryMap.has(e.path);
-  });
-  ctx.entries = successfulEntries;
-  logPhaseStart(4, TOTAL_PHASES, `写入元数据（${ctx.entries.length} 条 relations + local KB）...`);
-  phase4WriteRelations(ctx, relationsCache);
+      // 路径向量写入
+      if (pathEntries.length > 0) {
+        logInfo(`写入路径向量索引（${pathEntries.length} 条）...`);
+        const pathResult = bulkStorePaths(pathEntries);
+        logInfo(`路径向量写入完成：成功 ${pathResult.ok.size}，失败 ${pathResult.errors.length}`);
+      }
 
-  // 持久化
-  writeJson(groupIndexPath, groupIndex as unknown as Record<string, unknown>);
-  writeJson(relationsCachePath, relationsCache as unknown as Record<string, unknown>);
-  logPhaseDone(4, TOTAL_PHASES, '元数据写入完成');
+      return { vec, skippedFromProgress };
+    })(),
+
+    // 分支 B: Group 树 + KB 写入
+    (async () => {
+      const ctx: ImportContext = {
+        scope: args.scope,
+        sourceDir: results.meta.sourceDir,
+        rootName: results.meta.rootName,
+        entries: results.entries,
+        memoryMap: new Map(), // Phase 3/4 不再依赖 memoryMap（S-03 已移除 memoryId 写入）
+        groups: new Set<string>([results.meta.rootName]),
+        mapping,
+      };
+
+      // Phase 3: 构建 Group 树
+      logPhaseStart(3, TOTAL_PHASES, '构建 Group 树 ...');
+      phase3EnsureGroups(ctx, groupIndex);
+      logPhaseDone(3, TOTAL_PHASES, `Group 树构建完成，涉及 ${ctx.groups.size} 个 Group`);
+
+      // Phase 4: 写入 relations-cache + local KB
+      // 行为变更：所有非 delete 条目都写入 relations-cache（向量化失败不影响 KB 通道）
+      const validEntries = ctx.entries.filter((e) => e.action !== 'delete');
+      ctx.entries = validEntries;
+      logPhaseStart(4, TOTAL_PHASES, `写入元数据（${ctx.entries.length} 条 relations + local KB）...`);
+      phase4WriteRelations(ctx, relationsCache);
+
+      // 持久化
+      writeJson(groupIndexPath, groupIndex as unknown as Record<string, unknown>);
+      writeJson(relationsCachePath, relationsCache as unknown as Record<string, unknown>);
+      logPhaseDone(4, TOTAL_PHASES, '元数据写入完成');
+
+      return { ctx, groupIndex };
+    })(),
+  ]);
+
+  // 合并 memoryMap：进度文件恢复的 + 本次新向量化的
+  const mergedMap = new Map([...vectorizeResult.skippedFromProgress, ...vectorizeResult.vec.ok]);
+  const skipCount = vectorizeResult.skippedFromProgress.size;
+
+  const ctx = kbResult.ctx;
 
   // Phase 5: 记录 source
   logPhaseStart(5, TOTAL_PHASES, '记录 source commit ...');
@@ -588,7 +605,7 @@ export async function handleImport(args: HandleImportArgs): Promise<ImportResult
   // 成功完成，清理进度文件（REQ-04）
   cleanProgressFile(args.scope);
 
-  logSummary(`导入完成：total=${total}  vectorized=${mergedMap.size}  skipped=${skipCount}  errors=${vec.errors.length}`);
+  logSummary(`导入完成：total=${total}  vectorized=${mergedMap.size}  skipped=${skipCount}  errors=${vectorizeResult.vec.errors.length}`);
 
   return {
     ok: true,
@@ -598,9 +615,9 @@ export async function handleImport(args: HandleImportArgs): Promise<ImportResult
     stats: {
       total,
       vectorized: mergedMap.size,
-      errors: vec.errors.length,
+      errors: vectorizeResult.vec.errors.length,
     },
-    errors: vec.errors,
+    errors: vectorizeResult.vec.errors,
     groups: [...ctx.groups].sort(),
     source,
   };
