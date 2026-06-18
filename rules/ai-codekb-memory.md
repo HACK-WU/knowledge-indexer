@@ -21,7 +21,7 @@ provider:
 # monitor-memory   — BK-Monitor 项目记忆
 # user-profile     — 用户画像（全局固定）
 ```
-
+> 注意： 以上面的为例，monitor、user-profile 、user-profile 都要配置到mem 和ki 的配置中
 ---
 
 ## 记忆系统分工
