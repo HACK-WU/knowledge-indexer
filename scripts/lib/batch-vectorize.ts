@@ -34,6 +34,8 @@ export interface BatchVectorizeOptions {
   timeoutMs?: number;
   /** memory category，默认 kb-import */
   category?: string;
+  /** 每完成一条时回调，用于增量保存进度 */
+  onProgress?: (completed: { path: string; memoryId: string }[], failedCount: number) => void;
 }
 
 /** bulk-store --json 输出结构 */
@@ -228,6 +230,9 @@ export function bulkVectorize(
     const STATUS_PATTERN = /^\[(\d+)\/\d+\]\s+(✅|❌|⏭️)/;
     // 收集每条的结果: index → { ok, error? }
     const perEntryResults = new Map<number, { ok: boolean; error?: string }>();
+    // 增量进度跟踪：已完成的条目列表，用于 onProgress 回调
+    const incrementalCompleted: { path: string; memoryId: string }[] = [];
+    let incrementalFailed = 0;
 
     // 实时转发 stderr 到终端（环形缓冲：只保留最后 4000 字节，确保真正的错误信息不被截断）
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -264,8 +269,14 @@ export function bulkVectorize(
         const status = m[2];
         if (status === '✅') {
           perEntryResults.set(idx, { ok: true });
+          // 实时通知调用方：增量保存进度
+          const fakeId = crypto.createHash('md5').update(entries[idx].path).digest('hex').slice(0, 16);
+          incrementalCompleted.push({ path: entries[idx].path, memoryId: fakeId });
+          options.onProgress?.(incrementalCompleted, incrementalFailed);
         } else if (status === '❌') {
           perEntryResults.set(idx, { ok: false, error: 'bulk-store failed' });
+          incrementalFailed++;
+          options.onProgress?.(incrementalCompleted, incrementalFailed);
         } else if (status === '⏭️') {
           perEntryResults.set(idx, { ok: false, error: 'skipped' });
         }

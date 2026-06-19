@@ -367,6 +367,37 @@ async function phase2Vectorize(
 
   logPhaseStart(2, totalPhases, `批量向量化（${allToVectorize.length} 条${skipCount > 0 ? `，${skipCount} 已跳过` : ''}）...`);
 
+  // 增量写入进度文件的辅助函数
+  const startedAt = existingProgress?.startedAt || new Date().toISOString();
+  let lastSaveCount = 0;
+  const SAVE_INTERVAL = 5; // 每完成 5 条写一次进度文件
+
+  function saveProgressIncrement() {
+    const merged: ProgressEntry[] = [
+      ...(existingProgress?.completed || []),
+      ...newProgressEntries,
+    ];
+    writeProgressFile(scope, {
+      scope,
+      mode: 'full',
+      rootName,
+      startedAt,
+      total: allToVectorize.length,
+      completed: merged,
+    });
+    lastSaveCount = newProgressEntries.length;
+  }
+
+  // SIGINT 处理：中断时保存已有进度
+  const sigintHandler = () => {
+    if (newProgressEntries.length > lastSaveCount) {
+      saveProgressIncrement();
+    }
+    process.stderr.write(`\n⚠ 中断：已保存 ${newProgressEntries.length} 条向量化进度，重新执行 import 可从断点继续\n`);
+    process.exit(130);
+  };
+  process.on('SIGINT', sigintHandler);
+
   let vec: BatchVectorizeResult;
 
   if (needVectorize.length === 0) {
@@ -374,10 +405,38 @@ async function phase2Vectorize(
     vec = { ok: new Map(), errors: [] };
     logPhaseDone(2, totalPhases, `全部已跳过，无需向量化`);
   } else {
-    vec = await bulkVectorize(needVectorize, scope, { timeoutMs: 60_000 + needVectorize.length * 10_000 });
+    // entry lookup map for onProgress callback
+    const entryLookup = new Map(needVectorize.map((e) => [e.path, e]));
 
-    // 构建新完成的进度条目
+    vec = await bulkVectorize(needVectorize, scope, {
+      timeoutMs: 60_000 + needVectorize.length * 10_000,
+      onProgress: (completed, _failedCount) => {
+        // 从回调结果中提取新增的条目（只添加尚未在 newProgressEntries 中的）
+        const currentPaths = new Set(newProgressEntries.map((e) => e.path));
+        for (const { path: p, memoryId } of completed) {
+          if (currentPaths.has(p)) continue;
+          const entry = entryLookup.get(p);
+          if (entry) {
+            newProgressEntries.push({
+              path: entry.path,
+              groupPath: entry.groupPath,
+              relation: deriveRelationText(entry.path),
+              memoryId,
+            });
+            currentPaths.add(p);
+          }
+        }
+        // 每 N 条增量写入进度文件
+        if (newProgressEntries.length - lastSaveCount >= SAVE_INTERVAL) {
+          saveProgressIncrement();
+        }
+      },
+    });
+
+    // 最终补充：将 vec.ok 中可能漏掉的条目也加入（容错）
+    const finalPaths = new Set(newProgressEntries.map((e) => e.path));
     for (const [p, mid] of vec.ok) {
+      if (finalPaths.has(p)) continue;
       const entry = needVectorize.find((e) => e.path === p);
       if (entry) {
         newProgressEntries.push({
@@ -392,19 +451,11 @@ async function phase2Vectorize(
     logPhaseDone(2, totalPhases, `向量化完成：新增 ${vec.ok.size}，失败 ${vec.errors.length}${skipCount > 0 ? `，跳过 ${skipCount}` : ''}`);
   }
 
-  // 合并 memoryMap 并写入进度文件
-  const mergedCompleted: ProgressEntry[] = [
-    ...(existingProgress?.completed || []),
-    ...newProgressEntries,
-  ];
-  writeProgressFile(scope, {
-    scope,
-    mode: 'full',
-    rootName,
-    startedAt: existingProgress?.startedAt || new Date().toISOString(),
-    total: allToVectorize.length,
-    completed: mergedCompleted,
-  });
+  // 移除 SIGINT 处理器
+  process.removeListener('SIGINT', sigintHandler);
+
+  // 最终写入进度文件
+  saveProgressIncrement();
 
   return { vec, skippedFromProgress, newProgressEntries };
 }
