@@ -1,6 +1,6 @@
 ---
 name: ki-foundation
-description: ki 命令架构心智模型与命令参考。codekb-skill 和 memory-skill 的前置依赖。当 AI 需要使用 knowledge-indexer 时必须先加载本 skill。覆盖 ki 三层架构、内部数据结构、运行时链路、query-group/get-module-info/sync-relation/manage-index 命令语法、keywords 规则、常见错误与修复。
+description: ki 命令架构心智模型与命令参考。codekb-skill、memory-skill、snippet-memory、agents-md-init 的前置依赖。当 AI 需要使用 knowledge-indexer 时必须先加载本 skill。覆盖 ki 三层架构、内部数据结构、运行时链路、query-group/get-module-info/sync-relation/manage-index 命令语法、keywords 规则、常见错误与修复。
 ---
 
 # ki 基础知识与命令参考
@@ -185,3 +185,5 @@ input: { scope, input: "/path/to/batch-data.json" }
 | codekb-skill | `${scope}` |
 | memory-skill（项目记忆） | `${scope}-memory` |
 | memory-skill（用户画像） | `user-profile` |
+| snippet-memory（代码要点） | `${scope}-memory`（`通用记忆片段/` Group） |
+| agents-md-init（AGENTS.md 初始化） | 查询所有 scope + `${scope}-memory` + `user-profile` |
