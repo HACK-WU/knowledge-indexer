@@ -11,7 +11,7 @@
  *   - 写入失败不阻塞主流程，errors 仅记录日志
  */
 
-import { execFileSync } from 'child_process';
+import { execFileSync, execFile } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -223,6 +223,66 @@ export function storeOnePath(
       error: `[path-vectorize] store 失败${statusInfo}: ${e.message || ''}${stderr ? `\n${stderr.trim().slice(0, 200)}` : ''}`.trim(),
     };
   }
+}
+
+// ─── 异步单条存储（fire-and-forget 场景） ───
+
+/**
+ * 异步单条存储路径向量（sync-relation 后台写入场景）
+ *
+ * 与 storeOnePath 的区别：底层用 child_process.exec + Promise，
+ * 不阻塞事件循环，适用于 MCP server 长驻进程的后台向量写入。
+ */
+export async function storeOnePathAsync(
+  entry: PathVectorizeEntry,
+  options?: PathVectorizeOptions
+): Promise<{ ok: true; memoryId: string } | { ok: false; error: string }> {
+  const timeout = options?.timeoutMs
+    || parseInt(process.env.MEM_TIMEOUT_MS || '', 10)
+    || DEFAULT_TIMEOUT_MS;
+
+  // 数组传参，避免 shell 解析（与 storeOnePath 的 execFileSync 保持一致的安全模型）
+  const args = [
+    'store', entry.text,
+    '--scope', entry.scope,
+    '--tags', entry.tag,
+    '--category', PATH_CATEGORY,
+    '--importance', PATH_IMPORTANCE,
+  ];
+
+  return new Promise((resolve) => {
+    execFile('mem', args, {
+      encoding: 'utf-8',
+      timeout,
+      maxBuffer: 10 * 1024 * 1024,
+      shell: false,
+    }, (err, stdout, stderr) => {
+      if (err) {
+        const e = err as NodeJS.ErrnoException;
+        const stdoutStr = stdout ? stdout.toString() : '';
+        // 非 0 退出但可能有 Memory ID
+        const m = stdoutStr.match(MEMORY_ID_PATTERN);
+        if (m) {
+          resolve({ ok: true, memoryId: m[1] });
+          return;
+        }
+        const stderrStr = stderr ? stderr.toString() : '';
+        const statusInfo = typeof e.status === 'number' ? ` exitCode=${e.status}` : '';
+        resolve({
+          ok: false,
+          error: `[path-vectorize] storeAsync 失败${statusInfo}: ${e.message || ''}${stderrStr ? `\n${stderrStr.trim().slice(0, 200)}` : ''}`.trim(),
+        });
+        return;
+      }
+      const stdoutStr = stdout || '';
+      const m = stdoutStr.match(MEMORY_ID_PATTERN);
+      if (m) {
+        resolve({ ok: true, memoryId: m[1] });
+        return;
+      }
+      resolve({ ok: false, error: '无法从 stdout 解析 Memory ID' });
+    });
+  });
 }
 
 // ─── 删除 ───

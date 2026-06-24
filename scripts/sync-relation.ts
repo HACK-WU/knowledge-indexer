@@ -29,9 +29,9 @@ import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
 import { resolveGroupPath } from './lib/group-resolve.js';
 import {
   buildRelationContent,
-  storeOnePath,
+  storeOnePathAsync,
 } from './lib/path-vectorize.js';
-import { memStore, ensureMemAvailable } from './lib/mem-client.js';
+import { memStoreAsync, ensureMemAvailable } from './lib/mem-client.js';
 import { writeBackToWiki } from './lib/wiki-sync.js';
 
 // ─── 类型定义 ───
@@ -398,6 +398,62 @@ export type SyncRelationResult =
   | { ok: true; relation: string; keywords: string[]; invalid_keywords: string[]; evicted: string | null; hint?: string; vectorPending?: boolean; wikiSynced?: boolean; wikiFile?: string; wikiReason?: string }
   | { ok: false; error: string };
 
+// ─── 向量后台回写（fire-and-forget） ───
+
+/**
+ * 向量后台写入逻辑，供 setImmediate 调用。
+ * 单独提取为 async 函数，使 setImmediate 能通过 .catch() 兜底未捕获 rejection。
+ */
+async function vectorWriteBack(params: {
+  relation: string;
+  group: string;
+  keywordList: string[];
+  moduleInfo: string;
+  scope: string;
+  cachePath: string;
+}): Promise<void> {
+  const { relation, group, keywordList, moduleInfo, scope, cachePath } = params;
+
+  // ki-relation 路径向量
+  try {
+    const relText = buildRelationContent(relation, group, keywordList);
+    await storeOnePathAsync({ text: relText, tag: 'ki-relation', scope });
+  } catch (err) {
+    console.warn(`[sync-relation] ki-relation 向量异步写入失败: ${(err as Error).message}`);
+  }
+
+  // ki-search 语义向量 + memoryId 回写
+  try {
+    const avail = ensureMemAvailable();
+    if (avail.available) {
+      const memResult = await memStoreAsync({
+        scope,
+        text: moduleInfo,
+        keywords: keywordList,
+        tags: 'ki-search',
+      });
+      // 异步回写 memoryId 到 cache（读取最新 cache 避免覆盖并发写入）
+      try {
+        const latestCache = readJson<RelationsCache>(cachePath);
+        if (latestCache) {
+          const groupData = latestCache.groups[group];
+          if (groupData) {
+            const rel = groupData.hot_relations.find(r => r.text === relation);
+            if (rel) {
+              rel.memoryId = memResult.memoryId;
+              writeJson(cachePath, latestCache);
+            }
+          }
+        }
+      } catch {
+        // memoryId 回写失败不影响主流程，delete 时用 search 兜底
+      }
+    }
+  } catch (err) {
+    console.warn(`[sync-relation] ki-search 向量异步写入失败: ${(err as Error).message}`);
+  }
+}
+
 export function executeSyncRelation(params: SyncRelationParams): SyncRelationResult {
   try {
     const { scope, moduleInfo } = params;
@@ -442,29 +498,16 @@ export function executeSyncRelation(params: SyncRelationParams): SyncRelationRes
     // WAL 持久化
     writeJson(cachePath, cache);
 
-    // 向量写入异步执行（fire-and-forget，不阻塞 MCP 返回）
-    // MCP server 是长驻进程，异步任务会自然完成
-    // CLI 模式下向量可能丢失，这是设计允许的降级行为
-    Promise.resolve().then(async () => {
-      try {
-        const relText = buildRelationContent(relation, group, keywordList);
-        storeOnePath({ text: relText, tag: 'ki-relation', scope });
-      } catch {
-        // 向量写入失败不影响主流程
-      }
-      try {
-        const avail = ensureMemAvailable();
-        if (avail.available) {
-          memStore({
-            scope,
-            text: moduleInfo,
-            keywords: keywordList,
-            tags: 'ki-search',
-          });
-        }
-      } catch (err) {
-        console.warn(`[sync-relation] 向量异步写入失败: ${(err as Error).message}`);
-      }
+    // 向量写入异步执行（真正的 fire-and-forget，不阻塞 MCP 返回）
+    // 用 setImmediate（宏任务）确保 MCP response 先于向量写入发送；
+    // 内部用 storeOnePathAsync / memStoreAsync（child_process.exec）不阻塞事件循环，
+    // 连续请求可并发处理。失败仅记日志，不影响主流程。
+    // 异步完成后单独回写 memoryId 到 cache，供后续 delete 定位
+    setImmediate(() => {
+      vectorWriteBack({ relation, group, keywordList, moduleInfo, scope, cachePath }).catch(err => {
+        // 兜底：防止 setImmediate async 回调产生未捕获的 Promise rejection
+        console.warn(`[sync-relation] 向量后台写入异常: ${(err as Error).message}`);
+      });
     });
 
     // Wiki 写回（容错，失败不阻塞）

@@ -7,6 +7,7 @@ import { registerManageIndexTools } from './lib/mcp-tools/manage-index.js';
 import { registerSearchTool } from './lib/mcp-tools/search.js';
 import { registerStoreTool } from './lib/mcp-tools/store.js';
 import { registerBulkStoreTool } from './lib/mcp-tools/bulk-store.js';
+import { registerDeleteRelationTool } from './lib/mcp-tools/delete-relation.js';
 
 export async function startMcpServer(): Promise<void> {
   const server = new McpServer({
@@ -22,6 +23,7 @@ export async function startMcpServer(): Promise<void> {
   registerSearchTool(server);
   registerStoreTool(server);
   registerBulkStoreTool(server);
+  registerDeleteRelationTool(server);
 
   // 启动 stdio 传输
   const transport = new StdioServerTransport();

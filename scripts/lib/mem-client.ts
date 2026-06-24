@@ -10,7 +10,7 @@
  *   - 所有方法同步执行（spawnSync），与 ki 脚本执行模型一致
  */
 
-import { execFileSync } from 'child_process';
+import { execFileSync, execFile } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -202,6 +202,45 @@ export function memStore(params: {
   if (m) return { memoryId: m[1] };
 
   // 尝试从 JSON 输出提取
+  const json = extractJson(stdout) as { id?: string; memoryId?: string } | null;
+  const id = json?.id || json?.memoryId;
+  if (id) return { memoryId: id };
+
+  throw new Error('无法从 mem store 输出中解析 Memory ID');
+}
+
+/**
+ * 异步存储单条文本到 mem（不阻塞事件循环）
+ *
+ * 与 memStore 的区别：底层用 execMemAsync（child_process.exec），
+ * 适用于 fire-and-forget 场景（如 sync-relation 的向量写入）。
+ * 返回 Promise<MemStoreResult>，失败时 reject。
+ */
+export async function memStoreAsync(params: {
+  scope: string;
+  text: string;
+  tags?: string;
+  keywords?: string[];
+  category?: string;
+  importance?: number;
+}): Promise<MemStoreResult> {
+  if (params.text.length > MAX_TEXT_LENGTH) {
+    throw new Error(`text 超过 ${MAX_TEXT_LENGTH} 字符限制（当前 ${params.text.length}）`);
+  }
+
+  const fullText = params.keywords?.length
+    ? `${params.text}\n\n[关键词] ${params.keywords.join(', ')}`
+    : params.text;
+
+  const args = ['store', fullText, '--scope', params.scope];
+  if (params.tags) args.push('--tags', params.tags);
+  if (params.category) args.push('--category', params.category);
+  if (params.importance !== undefined) args.push('--importance', String(params.importance));
+
+  const stdout = await execMemAsync(args, DEFAULT_TIMEOUT_MS);
+  const m = stdout.match(MEMORY_ID_PATTERN);
+  if (m) return { memoryId: m[1] };
+
   const json = extractJson(stdout) as { id?: string; memoryId?: string } | null;
   const id = json?.id || json?.memoryId;
   if (id) return { memoryId: id };
@@ -474,4 +513,43 @@ function execMem(args: string[], timeout: number): string {
     if (stdout) return stdout;
     throw new Error(`mem ${args[0]} 失败: ${e.message}${stderr ? `\n${stderr}` : ''}`);
   }
+}
+
+/**
+ * 异步执行 mem CLI（基于 child_process.exec + Promise）
+ *
+ * 与 execMem（execFileSync）的区别：
+ *   - 不阻塞 Node.js 事件循环，子进程交由 OS 调度
+ *   - 适用于 fire-and-forget 场景（如 sync-relation 的向量写入）
+ *   - resolve 后 stdout/error 与 execMem 保持一致的解析逻辑
+ */
+function execMemAsync(args: string[], timeout: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // 数组传参，避免 shell 解析（与 execMem 的 execFileSync 保持一致的安全模型）
+    execFile('mem', args, {
+      encoding: 'utf-8',
+      timeout,
+      maxBuffer: 10 * 1024 * 1024,
+      env: getEnhancedEnv(),
+      shell: false,
+    }, (err, stdout, stderr) => {
+      if (err) {
+        const e = err as NodeJS.ErrnoException;
+        if (e.code === 'ENOENT') {
+          reject(new Error('mem CLI 未安装'));
+          return;
+        }
+        // 非 0 退出但 stdout 可能有内容（如 store 的 Memory ID）
+        const stdoutStr = stdout ? stdout.toString() : '';
+        if (stdoutStr) {
+          resolve(stdoutStr);
+          return;
+        }
+        const stderrStr = stderr ? stderr.toString().trim().slice(0, 300) : '';
+        reject(new Error(`mem ${args[0]} 失败: ${e.message}${stderrStr ? `\n${stderrStr}` : ''}`));
+        return;
+      }
+      resolve(stdout || '');
+    });
+  });
 }
