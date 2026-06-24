@@ -143,11 +143,12 @@ export function memSearch(params: {
   const json = extractJson(stdout) as {
     details?: {
       memories?: Array<{
-        id: string; text: string; score: number; category?: string; scope?: string;
+        id: string; text: string; score?: number; category?: string; scope?: string;
         importance?: number; tags?: string[];
+        sources?: { vector?: { score: number; rank?: number } };
       }>;
     };
-    results?: Array<{ id: string; content: string; score: number; tags?: string[] }>;
+    results?: Array<{ id: string; content: string; score?: number; tags?: string[] }>;
   } | null;
 
   // mem search 输出格式：{ details: { memories: [...] } } 或 { results: [...] }
@@ -157,7 +158,9 @@ export function memSearch(params: {
     .map(r => ({
       memoryId: r.id,
       content: (r as any).text || (r as any).content || '',
-      score: r.score,
+      // 优先取 vector score（纯向量余弦相似度），fallback 到顶层 hybrid score，兜底 0
+      // 与 path-search.ts:94 取分逻辑保持一致
+      score: (r as any).sources?.vector?.score ?? r.score ?? 0,
       tags: r.tags,
     }))
     .filter(r => {

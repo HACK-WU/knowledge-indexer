@@ -396,7 +396,7 @@ function formatGroupRelations(
   now: number,
   config: typeof DEFAULT_PARTITION_CONFIG,
   hotCount: number,
-  mode: string
+  modes: string[]
 ): string {
   const lines: string[] = [];
   const relations = data.hot_relations;
@@ -414,7 +414,7 @@ function formatGroupRelations(
   // 分区
   const partition = partitionRelations(relations, now, config);
 
-  if (mode === 'compact') {
+  if (modes.includes('compact')) {
     lines.push(`${groupPath}:`);
     lines.push('热门知识:');
     const top = partition.hot.slice(0, hotCount);
@@ -424,22 +424,56 @@ function formatGroupRelations(
     return lines.join('\n');
   }
 
-  // full 模式
+  const isFull = modes.includes('full');
+  const hotIdSet = new Set(partition.hot.map((r) => r.id));
+  const warmIdSet = new Set(partition.warm.map((r) => r.id));
+
   lines.push(`=== ${groupPath} ===`);
   lines.push('');
 
-  // 热门知识
-  const hotIdSet = new Set(partition.hot.map((r) => r.id));
-  const warmIdSet = new Set(partition.warm.map((r) => r.id));
-  const top = partition.hot.slice(0, hotCount);
-  if (top.length > 0) {
-    lines.push(`🔥 热门知识 (Top ${hotCount}):`);
-    top.forEach((rel, i) => {
-      const prefix = i === top.length - 1 ? '└──' : '├──';
-      const label = getRelPartitionLabel(rel, hotIdSet, warmIdSet, partition.emergingSet);
-      lines.push(`${prefix} ${rel.text} (score: ${fmtScore(rel.score)}) ${label}`);
-    });
-    lines.push('');
+  if (isFull) {
+    // full 模式：按分区展示全量 Relations，各分区上限 maxFullCount 防止输出过长
+    const maxFullCount = 50;
+    const sections: Array<{ title: string; rels: Relation[] }> = [
+      { title: `🔥 热区 (全部 ${partition.hot.length})`, rels: partition.hot },
+      { title: `🌡️ 常温区 (全部 ${partition.warm.length})`, rels: partition.warm },
+      { title: `❄️ 冷区 (全部 ${partition.cold.length})`, rels: partition.cold },
+    ];
+    for (const section of sections) {
+      if (section.rels.length === 0) continue;
+      const truncated = section.rels.length > maxFullCount;
+      const shown = truncated ? section.rels.slice(0, maxFullCount) : section.rels;
+      lines.push(section.title);
+      shown.forEach((rel, i) => {
+        const isLast = !truncated && i === shown.length - 1;
+        const prefix = isLast ? '└──' : '├──';
+        const label = getRelPartitionLabel(rel, hotIdSet, warmIdSet, partition.emergingSet);
+        lines.push(`${prefix} ${rel.text} (score: ${fmtScore(rel.score)}) ${label}`);
+      });
+      if (truncated) {
+        lines.push(`└── ... 还有 ${section.rels.length - maxFullCount} 个未展示，请缩小 groups 范围或用 hot/warm/cold 模式按需查看`);
+      }
+      lines.push('');
+    }
+  } else {
+    // 非 full：按指定分区展示，截断到 hotCount
+    for (const mode of modes) {
+      const rels = mode === 'hot' ? partition.hot
+        : mode === 'warm' ? partition.warm
+        : mode === 'cold' ? partition.cold
+        : mode === 'emerging' ? partition.hot.filter(r => partition.emergingSet.has(r.id))
+        : [];
+      if (rels.length === 0) continue;
+      const title = getModeTitle(mode);
+      const top = rels.slice(0, hotCount);
+      lines.push(`${title} (Top ${Math.min(hotCount, top.length)}):`);
+      top.forEach((rel, i) => {
+        const prefix = i === top.length - 1 ? '└──' : '├──';
+        const label = getRelPartitionLabel(rel, hotIdSet, warmIdSet, partition.emergingSet);
+        lines.push(`${prefix} ${rel.text} (score: ${fmtScore(rel.score)}) ${label}`);
+      });
+      lines.push('');
+    }
   }
 
   // 词云：keywords 属于 Group 级，无法按 Relation 分区归类热度
@@ -613,9 +647,16 @@ export function executeQueryGroup(params: QueryGroupParams): QueryGroupResult {
     if (groupsParam) {
       const groupPaths = groupsParam.split(',').map((s: string) => s.trim().replace(/^\/+|\/+$/g, ''));
       const results: string[] = [];
+      // 预解析所有路径，记录已显式指定的路径，递归时跳过避免重复展示
+      const explicitPaths = new Set<string>();
+      const resolvedList = groupPaths.map(gp => resolveGroupPath(gp, groupIndex, groupsData, scope));
+      for (const r of resolvedList) {
+        if (r.matched) explicitPaths.add(r.resolvedPath);
+      }
 
-      for (const gp of groupPaths) {
-        const resolved = resolveGroupPath(gp, groupIndex, groupsData, scope);
+      for (let idx = 0; idx < resolvedList.length; idx++) {
+        const resolved = resolvedList[idx];
+        const gp = groupPaths[idx];
 
         if (!resolved.matched) {
           const baseOutput = `=== ${gp} ===\n\n(暂无 Relations)\n\n💡 可使用 sync-relation 写入知识条目：\n   ki sync-relation --scope ${scope} --group "${gp}" --relation <描述> --module-info <内容> --keywords <词1,词2>\n\n${resolved.hint}`;
@@ -650,7 +691,21 @@ export function executeQueryGroup(params: QueryGroupParams): QueryGroupResult {
         }
 
         if (resolved.hint) results.push(resolved.hint);
-        results.push(formatGroupRelations(resolved.resolvedPath, data, now, config, hotCount, modes[0]));
+        results.push(formatGroupRelations(resolved.resolvedPath, data, now, config, hotCount, modes));
+
+        // full 模式：递归展示子 Group 的 Relations
+        if (modes.includes('full')) {
+          const childPrefix = resolved.resolvedPath + '/';
+          const childPaths = Object.keys(groupsData)
+            .filter(p => p.startsWith(childPrefix) && p !== resolved.resolvedPath && !explicitPaths.has(p))
+            .sort();
+          for (const childPath of childPaths) {
+            const childData = groupsData[childPath];
+            if (childData && childData.hot_relations.length > 0) {
+              results.push(formatGroupRelations(childPath, childData, now, config, hotCount, modes));
+            }
+          }
+        }
       }
 
       return { ok: true, output: results.join('\n\n') };

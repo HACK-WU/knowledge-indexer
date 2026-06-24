@@ -70,7 +70,7 @@ program
       scope: opts.scope,
       query: opts.query,
       limit: parseInt(opts.limit, 10),
-      threshold: parseFloat(opts.threshold) || undefined,
+      threshold: parseFloat(opts.threshold) ?? undefined,
       tags: opts.tags,
     });
     console.log(JSON.stringify(result, null, 2));
