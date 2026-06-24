@@ -75,7 +75,7 @@ input: { scope, mode: "hot|warm|cold|emerging|full"(默认hot), depth(默认4), 
 
 ```
 tool: ki_query_group
-input: { scope, groups: "目标Group路径(支持模糊匹配)", mode: "hot,emerging" }
+input: { scope, groups: "Group1,Group2(逗号分隔多组，支持模糊匹配)", mode: "hot,emerging" }
 ```
 
 ### 4.4 取原文
