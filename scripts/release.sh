@@ -70,7 +70,7 @@ if git tag -l "$TAG" | grep -q "$TAG"; then
   git push origin ":refs/tags/${TAG}" 2>/dev/null || true
 fi
 echo "==> 创建 tag: ${TAG}"
-git tag "$TAG" -m "Release ${TAG}"
+git tag --no-sign "$TAG" -m "Release ${TAG}"
 
 # 7. 推送 tag
 echo "==> 推送 tag 到远程..."
@@ -99,7 +99,7 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
     echo "==> Release ${TAG} 已存在，删除旧版本..."
     gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
     # 重新创建 tag（被 gh 删掉了）
-    git tag "$TAG" -m "Release ${TAG}"
+    git tag --no-sign "$TAG" -m "Release ${TAG}"
     git push origin "$TAG" --force
   fi
 
