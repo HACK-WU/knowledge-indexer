@@ -58,7 +58,7 @@ if [ ! -f "${TARBALL}" ]; then
 fi
 
 echo "==> 打包内容:"
-tar -tzf "${TARBALL}" | head -20
+tar -tzf "${TARBALL}" | head -20 || true
 echo "  ... (共 $(tar -tzf "${TARBALL}" | wc -l | tr -d ' ') 个文件)"
 echo "==> 打包文件大小: $(du -h ${TARBALL} | cut -f1)"
 
